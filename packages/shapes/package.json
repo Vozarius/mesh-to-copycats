@@ -1,0 +1,11 @@
+{
+  "name": "@mesh-to-copycats/shapes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@mesh-to-copycats/shared": "workspace:*",
+    "@mesh-to-copycats/voxelizer": "workspace:*"
+  }
+}
