@@ -1,9 +1,9 @@
-# Milestone 1 geometry core
+# Geometry core and sparse mesh pipeline
 
-This milestone implements one bounded operation: choose the closest catalogued
-block geometry for a single already-voxelized cell. Mesh import, triangle
-rasterization, material selection, neighbour solving and NBT export deliberately
-remain outside the package boundary.
+The implemented core imports packed triangle meshes, discovers only
+surface-intersected Minecraft cells, builds local occupancy lazily, and chooses
+the closest catalogued block geometry. Material selection, neighbour solving,
+the editor UI and NBT export remain outside the current package boundary.
 
 ```text
 target occupancy + descriptor
@@ -24,13 +24,15 @@ geometry result + every exact-equivalent shape realization
 ## Packages
 
 - `shared` owns stable enums and small cross-package value types.
+- `mesh` imports packed OBJ/GLB triangle data, triangulates faces, applies GLB
+  scene transforms and removes degenerate triangles.
 - `voxelizer` owns packed masks, conservative resampling, transforms,
-  descriptors and lazy `AdaptiveOccupancy`. It is an occupancy source in this
-  milestone, not yet a triangle voxelizer.
+  descriptors, triangle-centric sparse surface rasterization and lazy
+  `AdaptiveOccupancy` materialization per intersected cell.
 - `shapes` owns exact keys, the packed catalog, generated-artifact codec,
   extractor interchange schema and the replaceable fixture definitions.
-- `optimizer` owns routing, weighted missing/extra scoring, staged refinement
-  and the public/debug APIs.
+- `optimizer` owns routing, weighted missing/extra scoring, staged refinement,
+  packed batch results and the public/debug APIs.
 - `tools/harness` and `benchmarks` are consumers of the same public API.
 
 Dependencies point toward data packages only; the catalog has no dependency on
@@ -86,6 +88,8 @@ pinned NeoForge process
   -> extracted-catalog.json (reviewable registry/state/AABB interchange)
   -> TypeScript catalog compiler
   -> generated-shapes.bin + generated-blocks.bin + metadata.json
+  -> runtime-metadata.json (browser material/placement indexes)
+  -> extraction-audit.json (offline controlled probe evidence)
 ```
 
 Both binary files are versioned, explicitly little-endian SoA containers with
@@ -109,6 +113,23 @@ directions were rejected because the profile's coverage is
 `COMPLETE_REGISTRY`. The compiler replaces source-local profile references with
 SHA-256 content identities and deduplicates identical behavior without tying
 the identity to a block or part owner.
+
+The generated boundary has an explicit runtime/audit split. Core metadata
+checksums the browser runtime file, which contains numeric part-to-material and
+shape-to-placement profile indexes. Raw neighbour, placement and diagnostic
+evidence is retained only in the audit file. In the measured production catalog
+this reduces browser metadata from 438.91 MiB to 4.64 MiB.
+
+## Sparse mesh processing
+
+OBJ and embedded-buffer GLB 2.0 import produce typed position/index/UV/material
+arrays. The sparse rasterizer projects each triangle along its dominant axis,
+clips it against projected cell squares and emits only actually intersected
+cells. Biased 63-bit keys give deterministic ordering for signed coordinates;
+packed offset/posting arrays retain local triangle sets without per-cell object
+graphs. A cell's conservative 16³ surface mask is built on demand and wrapped
+as `AdaptiveOccupancy`, so empty model interiors are never volume-scanned or
+solid-filled.
 
 ## Exact geometry keys
 
@@ -160,6 +181,7 @@ routing statistics and optional timings.
 ```ts
 const optimizer = createGeometryOptimizer({ catalog, settings });
 const result = optimizer.optimizeCell({ occupancy, descriptor, settings });
+const batch = optimizer.optimizeBatch(inputs, { onProgress, signal });
 const comparison = optimizer.compare(input, result.best.geometryId, 16);
 ```
 
@@ -170,11 +192,12 @@ inflating every normal result.
 
 ## Future boundary
 
-Milestone 2 should add sparse mesh-to-cell rasterization and batch/worker APIs.
-After real workloads exist, profiling can justify an allocation-free
-`optimizeCellInto` path or a Rust/WASM kernel. Review and promotion of a real
-extracted catalog, material solving, per-part texture fitting, neighbour
-constraint solving and NBT serialization remain later independent stages.
+The next boundary is worker/chunk orchestration from an imported mesh through
+all sparse cells into a progressive optimized grid. Per-part surface sampling,
+texture/material solving, exact post-material canonicalization, neighbour
+constraint solving, NBT serialization and the React/Three editor remain later
+independent stages. Profiling can still justify a scratch-backed
+`optimizeCellInto` path or a Rust/WASM kernel.
 
 ## Current constraints
 
@@ -183,9 +206,9 @@ constraint solving and NBT serialization remain later independent stages.
   material profiles) and its binaries pass decode/CRC verification, but no
   reviewed production artifact is committed yet.
 - Full raw extraction evidence remains an offline audit artifact. The measured
-  compact interchange is about 478 MiB and generated metadata about 439 MiB;
-  the browser bundle must split compact runtime indexes from raw neighbour and
-  placement probes before this catalog can replace the fixture in the web app.
+  compact interchange is about 478 MiB and generated audit 438.91 MiB. Browser
+  loading uses only 4.64 MiB runtime metadata plus the two packed binaries and
+  verifies the runtime file against the CRC stored in core metadata.
 - The extraction command verifies the exact loaded Minecraft, NeoForge, Create,
   Copycats+ and extractor versions before calling upstream APIs. A missing or
   mismatched pin aborts extraction rather than producing mixed-version data.
@@ -220,9 +243,9 @@ constraint solving and NBT serialization remain later independent stages.
   owner grid deterministically assigns the lowest local part id. The separate
   part masks retain the overlap, but one owner byte cannot represent coincident
   ownership and a material-stage policy is still required.
-- `fromPredicate` is a synthetic center-sampling helper. It is not the future
-  conservative triangle rasterizer; `fromMask16` does use conservative
-  fine-to-coarse reduction.
-- The ergonomic result API allocates JavaScript collections. Benchmark data is
-  intended to guide a later scratch-backed `Into`/batch API rather than claim
-  allocation-free operation today.
+- The sparse rasterizer conservatively marks the triangle surface. It does not
+  perform closed-volume parity filling; by design, cells and microvoxels not
+  crossed by model surface remain air.
+- `optimizeBatch` returns packed typed arrays, while each internal cell call
+  still uses the ergonomic allocating result API. A future scratch-backed
+  `optimizeCellInto` or WASM kernel can remove those remaining hot-path objects.

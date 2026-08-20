@@ -28,6 +28,8 @@ import {
   DEFAULT_OPTIMIZER_SETTINGS,
   type GeometryCandidate,
   type GeometryOptimizerOptions,
+  type OptimizeBatchOptions,
+  type OptimizeBatchResult,
   type OptimizeCellInput,
   type OptimizeCellResult,
   type OptimizerSettings,
@@ -209,6 +211,50 @@ export class GeometryOptimizer {
         trackedTemporaryAllocations: allocations,
       },
       usedResolution,
+    };
+  }
+
+  public optimizeBatch(
+    inputs: readonly OptimizeCellInput[],
+    options: OptimizeBatchOptions = {},
+  ): OptimizeBatchResult {
+    const geometryIds = new Uint32Array(inputs.length);
+    const shapeIds = new Uint32Array(inputs.length);
+    const geometryErrors = new Float32Array(inputs.length);
+    const missingCounts = new Uint16Array(inputs.length);
+    const extraCounts = new Uint16Array(inputs.length);
+    const usedResolutions = new Uint8Array(inputs.length);
+    const stageTotals = {
+      afterMask16: 0,
+      afterMask4: 0,
+      afterMask8: 0,
+      candidatesGenerated: 0,
+    };
+    for (let index = 0; index < inputs.length; index += 1) {
+      if (options.signal?.aborted === true) {
+        throw new Error(`Geometry optimization aborted after ${index} cells`);
+      }
+      const result = this.optimizeCell(inputs[index]!);
+      geometryIds[index] = result.best.geometryId;
+      shapeIds[index] = result.best.shapeId;
+      geometryErrors[index] = result.best.geometryError;
+      missingCounts[index] = result.best.missingCount;
+      extraCounts[index] = result.best.extraCount;
+      usedResolutions[index] = result.usedResolution;
+      stageTotals.afterMask16 += result.debug.afterMask16;
+      stageTotals.afterMask4 += result.debug.afterMask4;
+      stageTotals.afterMask8 += result.debug.afterMask8;
+      stageTotals.candidatesGenerated += result.debug.candidatesGenerated;
+      options.onProgress?.(index + 1, inputs.length);
+    }
+    return {
+      extraCounts,
+      geometryErrors,
+      geometryIds,
+      missingCounts,
+      shapeIds,
+      stageTotals,
+      usedResolutions,
     };
   }
 

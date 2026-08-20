@@ -33,6 +33,8 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@24.13.3)(supports-color@7.2.0)(tsx@4.23.12)
 
+  packages/mesh: {}
+
   packages/optimizer:
     dependencies:
       '@mesh-to-copycats/shapes':

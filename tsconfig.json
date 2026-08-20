@@ -6,6 +6,7 @@
     "moduleResolution": "Bundler",
     "baseUrl": ".",
     "paths": {
+      "@mesh-to-copycats/mesh": ["packages/mesh/src/index.ts"],
       "@mesh-to-copycats/optimizer": ["packages/optimizer/src/index.ts"],
       "@mesh-to-copycats/shapes": ["packages/shapes/src/index.ts"],
       "@mesh-to-copycats/shared": ["packages/shared/src/index.ts"],

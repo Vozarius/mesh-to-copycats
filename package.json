@@ -14,6 +14,7 @@
     "benchmark": "tsx benchmarks/optimizer.bench.ts",
     "harness": "tsx tools/harness/src/cli.ts",
     "catalog:compile": "tsx tools/mod-extractor/src/compile.ts",
+    "catalog:verify": "tsx tools/harness/src/verify-catalog.ts",
     "catalog:fixture": "tsx tools/mod-extractor/src/compile.ts --fixture"
   },
   "devDependencies": {

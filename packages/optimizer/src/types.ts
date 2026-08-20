@@ -97,3 +97,27 @@ export interface GeometryOptimizerOptions {
   readonly catalog: PackedShapeCatalog;
   readonly settings?: Partial<OptimizerSettings>;
 }
+
+export interface OptimizerAbortSignal {
+  readonly aborted: boolean;
+}
+
+export interface OptimizeBatchOptions {
+  readonly onProgress?: (completed: number, total: number) => void;
+  readonly signal?: OptimizerAbortSignal;
+}
+
+export interface OptimizeBatchResult {
+  readonly extraCounts: Uint16Array;
+  readonly geometryErrors: Float32Array;
+  readonly geometryIds: Uint32Array;
+  readonly missingCounts: Uint16Array;
+  readonly shapeIds: Uint32Array;
+  readonly stageTotals: {
+    readonly afterMask16: number;
+    readonly afterMask4: number;
+    readonly afterMask8: number;
+    readonly candidatesGenerated: number;
+  };
+  readonly usedResolutions: Uint8Array;
+}

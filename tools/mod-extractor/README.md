@@ -7,6 +7,8 @@ pinned NeoForge mod -> extracted-catalog.json -> TypeScript compiler
                     -> generated-shapes.bin
                     -> generated-blocks.bin
                     -> metadata.json
+                    -> runtime-metadata.json
+                    -> extraction-audit.json
 ```
 
 The Java mod verifies its exact loaded source pins, enumerates authoritative
@@ -17,18 +19,22 @@ sparse per-part profiles containing only candidates accepted in at least one of
 the six directions. The TypeScript compiler validates the interchange
 document, assigns deterministic dense IDs, content-addresses and deduplicates
 material profiles, builds optimizer indices, and writes versioned little-endian
-SoA artifacts plus canonical evidence in `metadata.json`. The web/runtime side
-never depends on Minecraft or mod Java classes.
+SoA artifacts, a compact browser runtime index and a separate canonical audit
+file. The web/runtime side never depends on Minecraft or mod Java classes and
+does not download raw controlled probe evidence.
 
 ## Compile
 
 ```text
 pnpm catalog:compile -- --input path/to/extracted-catalog.json --out generated/catalog
 pnpm catalog:fixture -- --out generated/fixture
+pnpm catalog:verify -- generated/catalog
 ```
 
-Both commands decode and validate their output before writing it. Use
-`--no-verify` only for low-level diagnostics.
+Both compiler commands decode and validate their output before writing it. The
+verification command additionally checks the browser runtime CRC and runs every
+catalog geometry through the QUALITY optimizer, requiring an exact
+16³-equivalent selection. Use `--no-verify` only for low-level diagnostics.
 
 The pinned mod scaffold and exact upstream coordinates are documented in
 [`neoforge/README.md`](neoforge/README.md). The extractor output schema is

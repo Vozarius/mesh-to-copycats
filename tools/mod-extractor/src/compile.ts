@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import {
   compileExtractedCatalog,
   decodeGeneratedCatalog,
+  decodeWebRuntimeCatalog,
   encodeGeneratedCatalog,
   getFixtureCatalog,
   type GeneratedCatalogArtifacts,
@@ -78,6 +79,7 @@ async function generate(arguments_: Arguments): Promise<GeneratedCatalogArtifact
     compiled.catalog,
     compiled.document.sources,
     compiled.extraction,
+    { evidenceMode: 'split' },
   );
 }
 
@@ -85,19 +87,43 @@ async function main(): Promise<void> {
   const arguments_ = parseArguments(process.argv.slice(2));
   const artifacts = await generate(arguments_);
   if (arguments_.verify) {
-    decodeGeneratedCatalog({
-      blocks: artifacts.blocks,
-      metadata: artifacts.metadata,
-      shapes: artifacts.shapes,
-    });
+    if (artifacts.runtimeMetadataJson === undefined) {
+      decodeGeneratedCatalog({
+        blocks: artifacts.blocks,
+        metadata: artifacts.metadata,
+        shapes: artifacts.shapes,
+      });
+    } else {
+      decodeWebRuntimeCatalog({
+        blocks: artifacts.blocks,
+        metadata: artifacts.metadata,
+        runtimeMetadata: artifacts.runtimeMetadataJson,
+        shapes: artifacts.shapes,
+      });
+    }
   }
   const output = resolve(arguments_.output);
   await mkdir(output, { recursive: true });
-  await Promise.all([
+  const writes = [
     writeFile(resolve(output, 'generated-shapes.bin'), artifacts.shapes),
     writeFile(resolve(output, 'generated-blocks.bin'), artifacts.blocks),
     writeFile(resolve(output, 'metadata.json'), artifacts.metadataJson, 'utf8'),
-  ]);
+  ];
+  if (artifacts.runtimeMetadataJson !== undefined) {
+    writes.push(writeFile(
+      resolve(output, 'runtime-metadata.json'),
+      artifacts.runtimeMetadataJson,
+      'utf8',
+    ));
+  }
+  if (artifacts.auditMetadataJson !== undefined) {
+    writes.push(writeFile(
+      resolve(output, 'extraction-audit.json'),
+      artifacts.auditMetadataJson,
+      'utf8',
+    ));
+  }
+  await Promise.all(writes);
   process.stdout.write(
     `${JSON.stringify(
       {

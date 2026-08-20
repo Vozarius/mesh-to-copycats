@@ -4,6 +4,7 @@ import {
   EXTRACTED_CATALOG_SCHEMA,
   compileExtractedCatalog,
   decodeGeneratedCatalog,
+  decodeWebRuntimeCatalog,
   encodeGeneratedCatalog,
   generatedMaterialAcceptanceProfileId,
   parseExtractedCatalog,
@@ -395,6 +396,42 @@ describe('extractor evidence contract', () => {
     });
     expect(decoded.getShapeMetadata(0).neighborDependent).toBe(true);
     expect(decoded.getShapeParts(0)[0]?.key).toBe('shell');
+
+    const split = encodeGeneratedCatalog(
+      compiled.catalog,
+      compiled.document.sources,
+      compiled.extraction,
+      { evidenceMode: 'split' },
+    );
+    expect(split.metadata.extraction).toBeUndefined();
+    expect(split.auditMetadata?.extraction.shapes).toHaveLength(1);
+    expect(split.runtimeMetadata?.placementProfiles).toEqual([
+      {
+        assessment: 'CONDITIONAL',
+        flags: ['requires-player', 'requires-replaceable-target'],
+      },
+    ]);
+    const runtimeCatalog = decodeWebRuntimeCatalog({
+      blocks: split.blocks,
+      metadata: split.metadataJson,
+      runtimeMetadata: split.runtimeMetadataJson!,
+      shapes: split.shapes,
+    });
+    expect(runtimeCatalog.getPartMaterialProfile(0, 0).coverage).toBe(
+      'LEGACY_PARTIAL',
+    );
+    expect(runtimeCatalog.getPlacementProfile(0).assessment).toBe('CONDITIONAL');
+    expect(() =>
+      decodeWebRuntimeCatalog({
+        blocks: split.blocks,
+        metadata: split.metadataJson,
+        runtimeMetadata: `${split.runtimeMetadataJson!} `,
+        shapes: split.shapes,
+      }),
+    ).toThrow(/runtime metadata artifact checksum mismatch/u);
+    expect(split.runtimeMetadataJson!.length).toBeLessThan(
+      split.auditMetadataJson!.length,
+    );
   });
 
   it('gives old version-1 inputs explicit UNEXTRACTED defaults', () => {

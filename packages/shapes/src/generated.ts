@@ -23,6 +23,10 @@ const BLOCKS_MAGIC = 'M2CBLOK\0';
 const METADATA_SCHEMA = 'mesh-to-copycats.generated-catalog';
 export const EXTRACTION_EVIDENCE_SCHEMA = 'mesh-to-copycats.extraction-evidence';
 export const EXTRACTION_EVIDENCE_VERSION = 1;
+export const RUNTIME_EVIDENCE_SCHEMA = 'mesh-to-copycats.runtime-evidence';
+export const RUNTIME_EVIDENCE_VERSION = 1;
+export const EXTRACTION_AUDIT_SCHEMA = 'mesh-to-copycats.extraction-audit';
+export const EXTRACTION_AUDIT_VERSION = 1;
 const GRID16_KEY_PREFIX = 'GRID16_EXACT:v1:';
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 const MAX_SECTION_COUNT = 256;
@@ -109,6 +113,7 @@ export interface GeneratedArtifactDescription {
 export interface GeneratedCatalogMetadata {
   readonly artifacts: {
     readonly blocks: GeneratedArtifactDescription;
+    readonly runtime?: GeneratedArtifactDescription;
     readonly shapes: GeneratedArtifactDescription;
   };
   readonly counts: {
@@ -268,10 +273,49 @@ export interface GeneratedCatalogSources {
 }
 
 export interface GeneratedCatalogArtifacts {
+  readonly auditMetadata?: GeneratedExtractionAuditMetadata;
+  readonly auditMetadataJson?: string;
   readonly blocks: Uint8Array;
   readonly metadata: GeneratedCatalogMetadata;
   readonly metadataJson: string;
+  readonly runtimeMetadata?: GeneratedRuntimeCatalogMetadata;
+  readonly runtimeMetadataJson?: string;
   readonly shapes: Uint8Array;
+}
+
+export interface GeneratedCatalogEncodeOptions {
+  readonly evidenceMode?: 'embedded' | 'split';
+}
+
+export interface GeneratedRuntimePlacementProfile {
+  readonly assessment: PlacementSafetyAssessment;
+  readonly flags: readonly string[];
+}
+
+export interface GeneratedRuntimeCatalogMetadata {
+  readonly counts: {
+    readonly parts: number;
+    readonly shapes: number;
+  };
+  readonly diagnosticCounts: Readonly<Record<string, number>>;
+  readonly materialAcceptanceProfiles: readonly GeneratedMaterialAcceptanceProfileMetadata[];
+  readonly materialCandidates: readonly GeneratedMaterialCandidateMetadata[];
+  readonly partMaterialProfileIndexes: readonly number[];
+  readonly placementProfiles: readonly GeneratedRuntimePlacementProfile[];
+  readonly schema: typeof RUNTIME_EVIDENCE_SCHEMA;
+  readonly shapePlacementProfileIndexes: readonly number[];
+  readonly version: typeof RUNTIME_EVIDENCE_VERSION;
+}
+
+export interface GeneratedExtractionAuditMetadata {
+  readonly counts: {
+    readonly parts: number;
+    readonly shapes: number;
+  };
+  readonly extraction: GeneratedCatalogExtractionMetadata;
+  readonly schema: typeof EXTRACTION_AUDIT_SCHEMA;
+  readonly sources: GeneratedCatalogSources;
+  readonly version: typeof EXTRACTION_AUDIT_VERSION;
 }
 
 export interface GeneratedCatalogInput {
@@ -1112,6 +1156,190 @@ function canonicalExtractionMetadata(
   };
 }
 
+function runtimePlacementProfile(
+  value: unknown,
+  label: string,
+): GeneratedRuntimePlacementProfile {
+  const source = evidenceRecord(value, label);
+  const assessment = source.assessment;
+  if (
+    assessment !== 'CONDITIONAL' &&
+    assessment !== 'SAFE' &&
+    assessment !== 'UNEXTRACTED' &&
+    assessment !== 'UNSAFE'
+  ) {
+    throw new Error(`${label}.assessment is invalid`);
+  }
+  if (!Array.isArray(source.flags)) throw new Error(`${label}.flags must be an array`);
+  return {
+    assessment,
+    flags: canonicalStrings(source.flags, `${label}.flags`),
+  };
+}
+
+function createRuntimeMetadata(
+  catalog: PackedShapeCatalog,
+  extraction: GeneratedCatalogExtractionMetadata,
+): GeneratedRuntimeCatalogMetadata {
+  verifyExtractionMatchesCatalog(
+    extraction,
+    catalog.blockIds,
+    catalog.states,
+    catalog.shapePartOffsets,
+    catalog.partKeys,
+  );
+  const profileIndexes = new Map(
+    extraction.materialAcceptanceProfiles.map((profile, index) => [profile.profileId, index]),
+  );
+  const partMaterialProfileIndexes: number[] = [];
+  const placementProfiles: GeneratedRuntimePlacementProfile[] = [];
+  const placementProfileIndexes = new Map<string, number>();
+  const shapePlacementProfileIndexes: number[] = [];
+  for (const shape of extraction.shapes) {
+    for (const part of shape.parts) {
+      const profileIndex = profileIndexes.get(part.materialAcceptanceProfileId);
+      if (profileIndex === undefined) {
+        throw new Error('Runtime metadata references an unknown material profile');
+      }
+      partMaterialProfileIndexes.push(profileIndex);
+    }
+    const placementProfile: GeneratedRuntimePlacementProfile = {
+      assessment: shape.placementSafety.assessment,
+      flags: shape.placementSafety.flags,
+    };
+    const placementKey = JSON.stringify(placementProfile);
+    let placementIndex = placementProfileIndexes.get(placementKey);
+    if (placementIndex === undefined) {
+      placementIndex = placementProfiles.length;
+      placementProfileIndexes.set(placementKey, placementIndex);
+      placementProfiles.push(placementProfile);
+    }
+    shapePlacementProfileIndexes.push(placementIndex);
+  }
+  if (partMaterialProfileIndexes.length !== catalog.partIds.length) {
+    throw new Error('Runtime material profile indexes do not cover every part');
+  }
+  const diagnosticCounts: Record<string, number> = {};
+  for (const diagnostic of extraction.diagnostics ?? []) {
+    diagnosticCounts[diagnostic.code] = (diagnosticCounts[diagnostic.code] ?? 0) + 1;
+  }
+  return {
+    counts: { parts: catalog.partIds.length, shapes: catalog.shapeCount },
+    diagnosticCounts: Object.fromEntries(
+      Object.entries(diagnosticCounts).sort(([left], [right]) => compareStrings(left, right)),
+    ),
+    materialAcceptanceProfiles: extraction.materialAcceptanceProfiles,
+    materialCandidates: extraction.materialCandidates,
+    partMaterialProfileIndexes,
+    placementProfiles,
+    schema: RUNTIME_EVIDENCE_SCHEMA,
+    shapePlacementProfileIndexes,
+    version: RUNTIME_EVIDENCE_VERSION,
+  };
+}
+
+export function parseGeneratedRuntimeMetadata(
+  value: unknown,
+): GeneratedRuntimeCatalogMetadata {
+  const parsed: unknown = typeof value === 'string' ? JSON.parse(value) : value;
+  const source = evidenceRecord(parsed, 'runtimeMetadata');
+  if (
+    source.schema !== RUNTIME_EVIDENCE_SCHEMA ||
+    source.version !== RUNTIME_EVIDENCE_VERSION
+  ) {
+    throw new Error('Runtime evidence schema or version is unsupported');
+  }
+  const counts = evidenceRecord(source.counts, 'runtimeMetadata.counts');
+  const shapeCount = counts.shapes;
+  const partCount = counts.parts;
+  if (
+    !Number.isInteger(shapeCount) ||
+    !Number.isInteger(partCount) ||
+    (shapeCount as number) < 0 ||
+    (partCount as number) < 0
+  ) {
+    throw new Error('Runtime evidence counts are invalid');
+  }
+  const materialCandidates = canonicalMaterialCandidates(
+    source.materialCandidates,
+    'runtimeMetadata.materialCandidates',
+  );
+  if (!Array.isArray(source.materialAcceptanceProfiles)) {
+    throw new Error('runtimeMetadata.materialAcceptanceProfiles must be an array');
+  }
+  const materialAcceptanceProfiles = source.materialAcceptanceProfiles.map(
+    (profile, index) => canonicalMaterialAcceptanceProfile(
+      profile,
+      `runtimeMetadata.materialAcceptanceProfiles[${index}]`,
+      materialCandidates,
+    ),
+  );
+  const profileIds = new Set<string>();
+  for (const profile of materialAcceptanceProfiles) {
+    if (profileIds.has(profile.profileId)) {
+      throw new Error('Runtime evidence contains duplicate material profiles');
+    }
+    profileIds.add(profile.profileId);
+  }
+  const canonicalIndexes = (
+    raw: unknown,
+    count: number,
+    maximum: number,
+    label: string,
+  ): number[] => {
+    if (!Array.isArray(raw) || raw.length !== count) {
+      throw new Error(`${label} does not match its catalog count`);
+    }
+    return raw.map((entry, index) => {
+      if (!Number.isInteger(entry) || (entry as number) < 0 || (entry as number) >= maximum) {
+        throw new Error(`${label}[${index}] is out of range`);
+      }
+      return entry as number;
+    });
+  };
+  if (!Array.isArray(source.placementProfiles) || source.placementProfiles.length === 0) {
+    throw new Error('runtimeMetadata.placementProfiles must be non-empty');
+  }
+  const placementProfiles = source.placementProfiles.map((profile, index) =>
+    runtimePlacementProfile(profile, `runtimeMetadata.placementProfiles[${index}]`),
+  );
+  const diagnosticSource = evidenceRecord(
+    source.diagnosticCounts,
+    'runtimeMetadata.diagnosticCounts',
+  );
+  const diagnosticCounts: Record<string, number> = {};
+  for (const [code, count] of Object.entries(diagnosticSource).sort(([left], [right]) =>
+    compareStrings(left, right),
+  )) {
+    evidenceString(code, 'runtimeMetadata diagnostic code');
+    if (!Number.isInteger(count) || (count as number) < 0) {
+      throw new Error(`runtimeMetadata diagnostic count for ${code} is invalid`);
+    }
+    diagnosticCounts[code] = count as number;
+  }
+  return {
+    counts: { parts: partCount as number, shapes: shapeCount as number },
+    diagnosticCounts,
+    materialAcceptanceProfiles,
+    materialCandidates,
+    partMaterialProfileIndexes: canonicalIndexes(
+      source.partMaterialProfileIndexes,
+      partCount as number,
+      materialAcceptanceProfiles.length,
+      'runtimeMetadata.partMaterialProfileIndexes',
+    ),
+    placementProfiles,
+    schema: RUNTIME_EVIDENCE_SCHEMA,
+    shapePlacementProfileIndexes: canonicalIndexes(
+      source.shapePlacementProfileIndexes,
+      shapeCount as number,
+      placementProfiles.length,
+      'runtimeMetadata.shapePlacementProfileIndexes',
+    ),
+    version: RUNTIME_EVIDENCE_VERSION,
+  };
+}
+
 function elementSize(type: ElementType): number {
   switch (type) {
     case ElementType.U8:
@@ -1609,6 +1837,37 @@ function parseMetadata(value: GeneratedCatalogMetadata | string): GeneratedCatal
   return parsed as GeneratedCatalogMetadata;
 }
 
+function validateArtifactDescription(
+  artifact: GeneratedArtifactDescription,
+  label: string,
+): void {
+  if (
+    typeof artifact !== 'object' ||
+    artifact === null ||
+    !Number.isSafeInteger(artifact.bytes) ||
+    artifact.bytes < 0 ||
+    !/^[0-9a-f]{8}$/u.test(artifact.crc32)
+  ) {
+    throw new Error(`Generated ${label} artifact description is invalid`);
+  }
+}
+
+export function verifyGeneratedRuntimeMetadataArtifact(
+  metadata: GeneratedCatalogMetadata | string,
+  runtimeMetadataJson: string,
+): void {
+  const parsed = parseMetadata(metadata);
+  const artifact = parsed.artifacts?.runtime;
+  if (artifact === undefined) {
+    throw new Error('Generated metadata does not declare a runtime metadata artifact');
+  }
+  validateArtifactDescription(artifact, 'runtime metadata');
+  const bytes = new TextEncoder().encode(runtimeMetadataJson);
+  if (artifact.bytes !== bytes.length || artifact.crc32 !== crcHex(bytes)) {
+    throw new Error('Generated runtime metadata artifact checksum mismatch');
+  }
+}
+
 function verifyMetadata(
   metadata: GeneratedCatalogMetadata,
   shapes: Uint8Array,
@@ -1632,6 +1891,11 @@ function verifyMetadata(
     metadata.artifacts.blocks === null
   ) {
     throw new Error('Generated metadata structure is invalid');
+  }
+  validateArtifactDescription(metadata.artifacts.shapes, 'shapes');
+  validateArtifactDescription(metadata.artifacts.blocks, 'blocks');
+  if (metadata.artifacts.runtime !== undefined) {
+    validateArtifactDescription(metadata.artifacts.runtime, 'runtime metadata');
   }
   if (
     metadata.schema !== METADATA_SCHEMA ||
@@ -1695,6 +1959,7 @@ export function encodeGeneratedCatalog(
   catalog: PackedShapeCatalog,
   sources: GeneratedCatalogSources = {},
   extraction?: GeneratedCatalogExtractionMetadata,
+  options: GeneratedCatalogEncodeOptions = {},
 ): GeneratedCatalogArtifacts {
   const geometryKeys = encodeStrings(catalog.geometryKeys);
   const routeEntries = [...catalog.routeIndex.entries()].sort(([left], [right]) =>
@@ -1767,9 +2032,40 @@ export function encodeGeneratedCatalog(
     catalog.geometryCount,
   );
 
+  const canonicalSourceMetadata = canonicalSources(sources);
+  const canonicalExtraction = extraction === undefined
+    ? undefined
+    : canonicalExtractionMetadata(extraction, catalog.shapeCount);
+  const splitEvidence = options.evidenceMode === 'split' && canonicalExtraction !== undefined;
+  const runtimeMetadata = splitEvidence
+    ? createRuntimeMetadata(catalog, canonicalExtraction)
+    : undefined;
+  const auditMetadata: GeneratedExtractionAuditMetadata | undefined = splitEvidence
+    ? {
+        counts: { parts: partCount, shapes: catalog.shapeCount },
+        extraction: canonicalExtraction,
+        schema: EXTRACTION_AUDIT_SCHEMA,
+        sources: canonicalSourceMetadata,
+        version: EXTRACTION_AUDIT_VERSION,
+      }
+    : undefined;
+  const runtimeMetadataJson = runtimeMetadata === undefined
+    ? undefined
+    : `${JSON.stringify(runtimeMetadata)}\n`;
+  const runtimeMetadataBytes = runtimeMetadataJson === undefined
+    ? undefined
+    : new TextEncoder().encode(runtimeMetadataJson);
   const metadata: GeneratedCatalogMetadata = {
     artifacts: {
       blocks: { bytes: blocks.length, crc32: crcHex(blocks) },
+      ...(runtimeMetadataBytes === undefined
+        ? {}
+        : {
+            runtime: {
+              bytes: runtimeMetadataBytes.length,
+              crc32: crcHex(runtimeMetadataBytes),
+            },
+          }),
       shapes: { bytes: shapes.length, crc32: crcHex(shapes) },
     },
     counts: {
@@ -1778,17 +2074,29 @@ export function encodeGeneratedCatalog(
       shapes: catalog.shapeCount,
     },
     exactGeometryKinds: ['GRID16_EXACT:v1'],
-    ...(extraction === undefined
+    ...(canonicalExtraction === undefined || splitEvidence
       ? {}
-      : { extraction: canonicalExtractionMetadata(extraction, catalog.shapeCount) }),
+      : { extraction: canonicalExtraction }),
     formatVersion: { major: FORMAT_MAJOR, minor: FORMAT_MINOR },
     schema: METADATA_SCHEMA,
-    sources: canonicalSources(sources),
+    sources: canonicalSourceMetadata,
   };
   return {
+    ...(auditMetadata === undefined
+      ? {}
+      : {
+          auditMetadata,
+          auditMetadataJson: `${JSON.stringify(auditMetadata)}\n`,
+        }),
     blocks,
     metadata,
     metadataJson: `${JSON.stringify(metadata)}\n`,
+    ...(runtimeMetadata === undefined || runtimeMetadataJson === undefined
+      ? {}
+      : {
+          runtimeMetadata,
+          runtimeMetadataJson,
+        }),
     shapes,
   };
 }

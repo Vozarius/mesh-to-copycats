@@ -364,6 +364,37 @@ describe('transformed catalog targets', () => {
   });
 });
 
+describe('packed batch optimization', () => {
+  it('returns deterministic typed-array summaries and progress', () => {
+    const geometryIds = [0, 1, Math.min(17, catalog.geometryCount - 1)];
+    const progress: number[] = [];
+    const batch = qualityOptimizer.optimizeBatch(
+      geometryIds.map((geometryId) => ({
+        occupancy: AdaptiveOccupancy.fromMask16(
+          catalog.getGeometryMask(geometryId, 16),
+        ),
+        settings: { alternatives: 0 },
+      })),
+      { onProgress: (completed) => progress.push(completed) },
+    );
+
+    expect(batch.geometryIds).toBeInstanceOf(Uint32Array);
+    expect(batch.shapeIds).toBeInstanceOf(Uint32Array);
+    expect(batch.geometryErrors).toBeInstanceOf(Float32Array);
+    expect(Array.from(batch.geometryIds)).toEqual(geometryIds);
+    expect(Array.from(batch.geometryErrors)).toEqual([0, 0, 0]);
+    expect(progress).toEqual([1, 2, 3]);
+    expect(batch.stageTotals.candidatesGenerated).toBeGreaterThan(0);
+  });
+
+  it('honors an already-aborted batch signal', () => {
+    expect(() => qualityOptimizer.optimizeBatch(
+      [{ occupancy: AdaptiveOccupancy.fromMask16(catalog.getGeometryMask(0, 16)) }],
+      { signal: { aborted: true } },
+    )).toThrow(/aborted after 0 cells/u);
+  });
+});
+
 describe('catalog-wide exact-target property', () => {
   it('finds a zero-error exact-equivalent geometry for every catalog target', () => {
     for (let geometryId = 0; geometryId < catalog.geometryCount; geometryId += 1) {

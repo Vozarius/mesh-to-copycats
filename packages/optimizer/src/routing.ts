@@ -386,16 +386,19 @@ export function generateCandidates(
 
   let geometryIds = [...combined];
   if (geometryIds.length > settings.maxGeneratedCandidates) {
-    geometryIds.sort((left, right) => {
-      const leftDistance =
-        hammingDistanceAtOffset(mask4, catalog.masks4, left * mask4.length) * 16 +
-        descriptorDistance(descriptor, catalog, left);
-      const rightDistance =
-        hammingDistanceAtOffset(mask4, catalog.masks4, right * mask4.length) * 16 +
-        descriptorDistance(descriptor, catalog, right);
-      return leftDistance - rightDistance || left - right;
-    });
-    geometryIds = geometryIds.slice(0, settings.maxGeneratedCandidates);
+    const ranked = geometryIds.map((geometryId) => ({
+      distance:
+        hammingDistanceAtOffset(mask4, catalog.masks4, geometryId * mask4.length) * 16 +
+        descriptorDistance(descriptor, catalog, geometryId),
+      geometryId,
+    }));
+    ranked.sort((left, right) =>
+      left.distance - right.distance || left.geometryId - right.geometryId,
+    );
+    const cutoff = ranked[settings.maxGeneratedCandidates - 1]!.distance;
+    let end = settings.maxGeneratedCandidates;
+    while (end < ranked.length && ranked[end]!.distance === cutoff) end += 1;
+    geometryIds = ranked.slice(0, end).map(({ geometryId }) => geometryId);
   } else {
     geometryIds.sort((left, right) => left - right);
   }

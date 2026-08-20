@@ -15,6 +15,8 @@ import {
   AdaptiveOccupancy,
   bitIndex,
   createMask,
+  rasterizeSparseCellMask16,
+  rasterizeSparseSurface,
   setBit,
   type TargetOccupancy,
 } from '../packages/voxelizer/src/index.js';
@@ -375,6 +377,50 @@ function warmUp(optimizer: GeometryOptimizer, catalog: PackedShapeCatalog): void
   }
 }
 
+function benchmarkSparseRasterizer(size = 96): object {
+  const positions = new Float32Array((size + 1) * (size + 1) * 3);
+  for (let y = 0; y <= size; y += 1) {
+    for (let x = 0; x <= size; x += 1) {
+      const vertex = y * (size + 1) + x;
+      positions[vertex * 3] = x + 0.25;
+      positions[vertex * 3 + 1] = y + 0.25;
+      positions[vertex * 3 + 2] = x * 0.25 + y * 0.125 + 0.25;
+    }
+  }
+  const indices = new Uint32Array(size * size * 6);
+  let cursor = 0;
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const lowerLeft = y * (size + 1) + x;
+      const lowerRight = lowerLeft + 1;
+      const upperLeft = lowerLeft + size + 1;
+      const upperRight = upperLeft + 1;
+      indices.set([lowerLeft, lowerRight, upperRight, lowerLeft, upperRight, upperLeft], cursor);
+      cursor += 6;
+    }
+  }
+  const mesh = { indices, positions };
+  const discoveryStarted = performance.now();
+  const surface = rasterizeSparseSurface(mesh);
+  const surfaceDiscoveryMs = performance.now() - discoveryStarted;
+  const masks = Math.min(surface.cellCount, 1024);
+  const masksStarted = performance.now();
+  for (let cell = 0; cell < masks; cell += 1) {
+    rasterizeSparseCellMask16(mesh, surface, cell);
+  }
+  const maskMaterializationMs = performance.now() - masksStarted;
+  const triangles = indices.length / 3;
+  return {
+    cellCount: surface.cellCount,
+    maskMaterializationMs,
+    masks,
+    masksPerSecond: masks / (maskMaterializationMs / 1000),
+    surfaceDiscoveryMs,
+    triangles,
+    trianglesPerSecond: triangles / (surfaceDiscoveryMs / 1000),
+  };
+}
+
 function main(): void {
   const options = parseArguments(process.argv.slice(2));
   if (options === undefined) return;
@@ -406,7 +452,7 @@ function main(): void {
   const report = {
     caveats: {
       allocations: 'Core tracked temporaries plus process heap delta; use node --expose-gc for less noisy heap data.',
-      voxelization: 'Mesh voxelization is outside milestone 1, so this field is zero; synthetic target preparation is reported separately.',
+      voxelization: 'Optimizer workloads exclude input preparation; sparse surface discovery and lazy mask materialization are reported separately.',
     },
     catalog: {
       buildMs: catalogBuildMs,
@@ -420,13 +466,14 @@ function main(): void {
       platform: process.platform,
     },
     results,
-    schemaVersion: 1,
+    schemaVersion: 2,
     settings: {
       cellsPerWorkload: options.cells,
       qualityMode: options.mode,
       seed: `0x${COMPLEX_SEED.toString(16)}`,
       workload: options.workload,
     },
+    sparseRasterizer: benchmarkSparseRasterizer(),
   };
   process.stdout.write(`${JSON.stringify(report, undefined, 2)}\n`);
 }
