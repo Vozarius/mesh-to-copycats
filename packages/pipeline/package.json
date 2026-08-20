@@ -1,0 +1,13 @@
+{
+  "name": "@mesh-to-copycats/pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@mesh-to-copycats/mesh": "workspace:*",
+    "@mesh-to-copycats/optimizer": "workspace:*",
+    "@mesh-to-copycats/shapes": "workspace:*",
+    "@mesh-to-copycats/voxelizer": "workspace:*"
+  }
+}

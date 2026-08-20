@@ -1,0 +1,11 @@
+{
+  "name": "@mesh-to-copycats/palette-generator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mesh-to-copycats/mesh": "workspace:*",
+    "@mesh-to-copycats/shapes": "workspace:*",
+    "fflate": "^0.8.3"
+  }
+}

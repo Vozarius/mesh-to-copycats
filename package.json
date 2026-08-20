@@ -15,7 +15,12 @@
     "harness": "tsx tools/harness/src/cli.ts",
     "catalog:compile": "tsx tools/mod-extractor/src/compile.ts",
     "catalog:verify": "tsx tools/harness/src/verify-catalog.ts",
-    "catalog:fixture": "tsx tools/mod-extractor/src/compile.ts --fixture"
+    "catalog:fixture": "tsx tools/mod-extractor/src/compile.ts --fixture",
+    "web:dev": "pnpm --filter @mesh-to-copycats/web dev",
+    "web:build": "pnpm --filter @mesh-to-copycats/web build",
+    "materials:verify": "tsx tools/harness/src/verify-materials.ts",
+    "palette:generate": "tsx tools/palette-generator/src/generate.ts",
+    "schematic:verify": "tsx tools/harness/src/verify-schematic.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

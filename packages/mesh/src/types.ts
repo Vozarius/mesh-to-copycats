@@ -1,19 +1,45 @@
 export interface PackedTriangleMesh {
   readonly bounds: Float32Array;
   readonly indices: Uint32Array;
+  readonly materialBaseColorsLinear?: Float32Array;
   readonly materialNames: readonly string[];
+  readonly materialTextureIndexes?: Int32Array;
+  readonly embeddedTextures?: readonly EmbeddedMeshTexture[];
   readonly positions: Float32Array;
   readonly texcoords?: Float32Array;
   readonly triangleMaterials: Uint32Array;
+  readonly textureAtlas?: PackedTextureAtlas;
   readonly vertexCount: number;
 }
 
+export interface EmbeddedMeshTexture {
+  readonly bytes: Uint8Array;
+  readonly mimeType: string;
+  readonly wrapS: TextureWrapMode;
+  readonly wrapT: TextureWrapMode;
+}
+
+export type TextureWrapMode = 10497 | 33071 | 33648;
+
+export interface PackedTextureAtlas {
+  readonly heights: Uint16Array;
+  readonly offsets: Uint32Array;
+  readonly rgbaSrgb: Uint8Array;
+  readonly widths: Uint16Array;
+  readonly wrapS: Uint32Array;
+  readonly wrapT: Uint32Array;
+}
+
 export interface MutableMeshData {
+  readonly embeddedTextures?: readonly EmbeddedMeshTexture[];
   readonly indices: number[];
+  readonly materialBaseColorsLinear?: number[];
   readonly materialNames: string[];
+  readonly materialTextureIndexes?: readonly number[];
   readonly positions: number[];
   readonly texcoords?: number[];
   readonly triangleMaterials: number[];
+  readonly textureAtlas?: PackedTextureAtlas;
 }
 
 export interface MeshFinalizeOptions {
@@ -34,6 +60,34 @@ export function finalizeMesh(
   if (source.indices.length % 3 !== 0) throw new Error('Index array must contain triangles');
   if (source.triangleMaterials.length !== source.indices.length / 3) {
     throw new Error('triangleMaterials must contain one entry per triangle');
+  }
+  if (
+    source.materialBaseColorsLinear !== undefined &&
+    source.materialBaseColorsLinear.length !== source.materialNames.length * 4
+  ) {
+    throw new Error('materialBaseColorsLinear must contain one RGBA value per material');
+  }
+  if (
+    source.materialTextureIndexes !== undefined &&
+    source.materialTextureIndexes.length !== source.materialNames.length
+  ) {
+    throw new Error('materialTextureIndexes must contain one entry per material');
+  }
+  if (source.materialTextureIndexes !== undefined) {
+    const textureCount = source.textureAtlas?.widths.length ?? source.embeddedTextures?.length ?? 0;
+    for (const index of source.materialTextureIndexes) {
+      if (!Number.isInteger(index) || index < -1 || index >= textureCount) {
+        throw new RangeError(`Material texture index ${index} is out of range`);
+      }
+    }
+  }
+  if (source.materialBaseColorsLinear !== undefined) {
+    finiteArray(source.materialBaseColorsLinear, 'materialBaseColorsLinear');
+    for (const component of source.materialBaseColorsLinear) {
+      if (component < 0 || component > 1) {
+        throw new RangeError('materialBaseColorsLinear components must be in 0..1');
+      }
+    }
   }
   const vertexCount = source.positions.length / 3;
   if (source.texcoords !== undefined && source.texcoords.length !== vertexCount * 2) {
@@ -95,12 +149,25 @@ export function finalizeMesh(
   return {
     bounds,
     indices: Uint32Array.from(filteredIndices),
+    ...(source.materialBaseColorsLinear === undefined
+      ? {}
+      : { materialBaseColorsLinear: Float32Array.from(source.materialBaseColorsLinear) }),
     materialNames: Object.freeze([...source.materialNames]),
+    ...(source.materialTextureIndexes === undefined
+      ? {}
+      : { materialTextureIndexes: Int32Array.from(source.materialTextureIndexes) }),
+    ...(source.embeddedTextures === undefined
+      ? {}
+      : { embeddedTextures: Object.freeze(source.embeddedTextures.map((texture) => ({
+          ...texture,
+          bytes: texture.bytes.slice(),
+        }))) }),
     positions: Float32Array.from(source.positions),
     ...(source.texcoords === undefined
       ? {}
       : { texcoords: Float32Array.from(source.texcoords) }),
     triangleMaterials: Uint32Array.from(filteredMaterials),
+    ...(source.textureAtlas === undefined ? {} : { textureAtlas: source.textureAtlas }),
     vertexCount,
   };
 }

@@ -1,4 +1,9 @@
-import { finalizeMesh, type PackedTriangleMesh } from './types.js';
+import {
+  finalizeMesh,
+  type EmbeddedMeshTexture,
+  type PackedTriangleMesh,
+  type TextureWrapMode,
+} from './types.js';
 
 const GLB_MAGIC = 0x4654_6c67;
 const JSON_CHUNK = 0x4e4f_534a;
@@ -204,6 +209,29 @@ function readAccessor(
   return { components, count, values };
 }
 
+function bufferViewBytes(
+  document: JsonRecord,
+  binary: Uint8Array,
+  bufferViewIndex: number,
+  label: string,
+): Uint8Array {
+  const bufferViews = array(document.bufferViews, 'bufferViews');
+  const view = record(bufferViews[bufferViewIndex], label);
+  if (view.buffer !== undefined && view.buffer !== 0) throw new Error(`${label} references an external buffer`);
+  const start = integer(view.byteOffset ?? 0, `${label}.byteOffset`);
+  const length = integer(view.byteLength, `${label}.byteLength`);
+  if (start + length > binary.length) throw new RangeError(`${label} exceeds the BIN chunk`);
+  return binary.slice(start, start + length);
+}
+
+function textureWrap(value: unknown, label: string): TextureWrapMode {
+  const mode = value === undefined ? 10497 : integer(value, label);
+  if (mode !== 10497 && mode !== 33071 && mode !== 33648) {
+    throw new Error(`${label} uses unsupported wrap mode ${mode}`);
+  }
+  return mode;
+}
+
 export function importGlb(
   input: ArrayBuffer | Uint8Array,
   options: GlbImportOptions = {},
@@ -245,12 +273,72 @@ export function importGlb(
     throw new Error('GLB external buffers are not supported');
   }
   const materials = document.materials === undefined ? [] : array(document.materials, 'materials');
+  const textureDefinitions = document.textures === undefined ? [] : array(document.textures, 'textures');
+  const imageDefinitions = document.images === undefined ? [] : array(document.images, 'images');
+  const samplerDefinitions = document.samplers === undefined ? [] : array(document.samplers, 'samplers');
+  const embeddedTextures: EmbeddedMeshTexture[] = textureDefinitions.map((entry, textureIndex) => {
+    const texture = record(entry, `textures[${textureIndex}]`);
+    const source = integer(texture.source, `textures[${textureIndex}].source`);
+    const image = record(imageDefinitions[source], `images[${source}]`);
+    if (image.uri !== undefined) throw new Error('GLB external and data-URI images are unsupported');
+    const mimeType = image.mimeType;
+    if (typeof mimeType !== 'string' || mimeType.length === 0) {
+      throw new Error(`images[${source}].mimeType must be present for an embedded image`);
+    }
+    const sampler = texture.sampler === undefined
+      ? undefined
+      : record(samplerDefinitions[integer(texture.sampler, `textures[${textureIndex}].sampler`)], 'sampler');
+    return {
+      bytes: bufferViewBytes(
+        document,
+        binary,
+        integer(image.bufferView, `images[${source}].bufferView`),
+        `images[${source}].bufferView`,
+      ),
+      mimeType,
+      wrapS: textureWrap(sampler?.wrapS, `textures[${textureIndex}].wrapS`),
+      wrapT: textureWrap(sampler?.wrapT, `textures[${textureIndex}].wrapT`),
+    };
+  });
   const materialNames = ['default', ...materials.map((entry, index) => {
     const material = record(entry, `materials[${index}]`);
     return typeof material.name === 'string' && material.name.length > 0
       ? material.name
       : `material_${index}`;
   })];
+  const materialBaseColorsLinear = [1, 1, 1, 1];
+  const materialTextureIndexes = [-1];
+  for (let index = 0; index < materials.length; index += 1) {
+    const material = record(materials[index], `materials[${index}]`);
+    const pbr = material.pbrMetallicRoughness === undefined
+      ? undefined
+      : record(material.pbrMetallicRoughness, `materials[${index}].pbrMetallicRoughness`);
+    const factor = pbr?.baseColorFactor === undefined
+      ? [1, 1, 1, 1]
+      : array(pbr.baseColorFactor, `materials[${index}].baseColorFactor`);
+    if (
+      factor.length !== 4 ||
+      factor.some((component) =>
+        typeof component !== 'number' || !Number.isFinite(component) || component < 0 || component > 1)
+    ) {
+      throw new Error(`materials[${index}].baseColorFactor must contain four values in 0..1`);
+    }
+    materialBaseColorsLinear.push(...factor as number[]);
+    const textureInfo = pbr?.baseColorTexture === undefined
+      ? undefined
+      : record(pbr.baseColorTexture, `materials[${index}].baseColorTexture`);
+    if (textureInfo?.extensions !== undefined) {
+      throw new Error('GLB base-color texture extensions are unsupported');
+    }
+    if (textureInfo?.texCoord !== undefined && textureInfo.texCoord !== 0) {
+      throw new Error('Only GLB TEXCOORD_0 base-color textures are supported');
+    }
+    const textureIndex = textureInfo === undefined
+      ? -1
+      : integer(textureInfo.index, `materials[${index}].baseColorTexture.index`);
+    if (textureIndex >= embeddedTextures.length) throw new RangeError('GLB base-color texture index is out of range');
+    materialTextureIndexes.push(textureIndex);
+  }
   const positions: number[] = [];
   const texcoords: number[] = [];
   const indices: number[] = [];
@@ -345,7 +433,10 @@ export function importGlb(
   return finalizeMesh(
     {
       indices,
+      materialBaseColorsLinear,
       materialNames,
+      ...(embeddedTextures.length === 0 ? {} : { embeddedTextures }),
+      ...(materialTextureIndexes.every((index) => index < 0) ? {} : { materialTextureIndexes }),
       positions,
       ...(hasTexcoords ? { texcoords } : {}),
       triangleMaterials,

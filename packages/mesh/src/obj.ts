@@ -2,6 +2,9 @@ import { finalizeMesh, type PackedTriangleMesh } from './types.js';
 
 export interface ObjImportOptions {
   readonly degenerateEpsilon?: number;
+  readonly materialBaseColorsLinear?: Readonly<
+    Record<string, readonly [red: number, green: number, blue: number, alpha?: number]>
+  >;
 }
 
 interface ObjReference {
@@ -107,14 +110,23 @@ export function importObj(
       }
     }
   }
+  const materialBaseColorsLinear = options.materialBaseColorsLinear === undefined
+    ? undefined
+    : materialNames.flatMap((name) => {
+        const color = options.materialBaseColorsLinear?.[name] ?? [1, 1, 1, 1];
+        return [color[0], color[1], color[2], color[3] ?? 1];
+      });
   return finalizeMesh(
     {
       indices,
+      ...(materialBaseColorsLinear === undefined ? {} : { materialBaseColorsLinear }),
       materialNames,
       positions,
       ...(hasTexcoords ? { texcoords } : {}),
       triangleMaterials,
     },
-    options,
+    options.degenerateEpsilon === undefined
+      ? {}
+      : { degenerateEpsilon: options.degenerateEpsilon },
   );
 }

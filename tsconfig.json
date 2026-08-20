@@ -6,8 +6,11 @@
     "moduleResolution": "Bundler",
     "baseUrl": ".",
     "paths": {
+      "@mesh-to-copycats/minecraft-nbt": ["packages/minecraft-nbt/src/index.ts"],
       "@mesh-to-copycats/mesh": ["packages/mesh/src/index.ts"],
       "@mesh-to-copycats/optimizer": ["packages/optimizer/src/index.ts"],
+      "@mesh-to-copycats/palette": ["packages/palette/src/index.ts"],
+      "@mesh-to-copycats/pipeline": ["packages/pipeline/src/index.ts"],
       "@mesh-to-copycats/shapes": ["packages/shapes/src/index.ts"],
       "@mesh-to-copycats/shared": ["packages/shared/src/index.ts"],
       "@mesh-to-copycats/voxelizer": ["packages/voxelizer/src/index.ts"]

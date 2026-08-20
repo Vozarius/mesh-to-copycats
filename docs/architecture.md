@@ -34,6 +34,17 @@ geometry result + every exact-equivalent shape realization
 - `optimizer` owns routing, weighted missing/extra scoring, staged refinement,
   packed batch results and the public/debug APIs.
 - `tools/harness` and `benchmarks` are consumers of the same public API.
+- `pipeline` composes import-independent meshes, sparse rasterization and
+  batched geometry fitting into a packed grid suitable for workers.
+- `palette` extracts bounded area-weighted surface samples, stores OKLab target
+  profiles, assigns samples through nearest part ownership and selects only
+  material-compatible exact geometry realizations.
+- `tools/palette-generator` resolves blockstates, inherited models and PNG
+  textures from ordered resource JARs into a source-fingerprinted browser palette.
+- `minecraft-nbt` writes deterministic gzip StructureTemplate files with audited
+  single-state and multipart Copycats material storage.
+- `apps/web` owns the React/Three editor shell and runs the pipeline in a
+  dedicated module Worker against the production browser catalog.
 
 Dependencies point toward data packages only; the catalog has no dependency on
 the optimizer.
@@ -192,12 +203,12 @@ inflating every normal result.
 
 ## Future boundary
 
-The next boundary is worker/chunk orchestration from an imported mesh through
-all sparse cells into a progressive optimized grid. Per-part surface sampling,
-texture/material solving, exact post-material canonicalization, neighbour
-constraint solving, NBT serialization and the React/Three editor remain later
-independent stages. Profiling can still justify a scratch-backed
-`optimizeCellInto` path or a Rust/WASM kernel.
+The next boundary is generated texture-derived Minecraft material profiles,
+texture image sampling, neighbour constraint solving and NBT serialization.
+Worker/chunk orchestration, per-part surface sampling, OKLab matching, exact
+post-material realization selection and the first React/Three editor are now
+implemented. Profiling can still justify a scratch-backed `optimizeCellInto`
+path or a Rust/WASM kernel.
 
 ## Current constraints
 

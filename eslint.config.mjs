@@ -7,6 +7,7 @@ export default tseslint.config(
       'node_modules/**',
       '.pnpm-store/**',
       'dist/**',
+      'apps/**/dist/**',
       'coverage/**',
       '.research/**',
       'eslint.config.mjs',
