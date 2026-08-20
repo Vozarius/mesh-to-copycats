@@ -3,5 +3,9 @@ node_modules/
 dist/
 coverage/
 .research/
+generated/
+tools/mod-extractor/neoforge/.gradle/
+tools/mod-extractor/neoforge/build/
+tools/mod-extractor/neoforge/run/
 *.log
 .DS_Store

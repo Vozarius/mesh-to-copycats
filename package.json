@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "benchmark": "tsx benchmarks/optimizer.bench.ts",
-    "harness": "tsx tools/harness/src/cli.ts"
+    "harness": "tsx tools/harness/src/cli.ts",
+    "catalog:compile": "tsx tools/mod-extractor/src/compile.ts",
+    "catalog:fixture": "tsx tools/mod-extractor/src/compile.ts --fixture"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

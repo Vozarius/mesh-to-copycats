@@ -27,8 +27,8 @@ geometry result + every exact-equivalent shape realization
 - `voxelizer` owns packed masks, conservative resampling, transforms,
   descriptors and lazy `AdaptiveOccupancy`. It is an occupancy source in this
   milestone, not yet a triangle voxelizer.
-- `shapes` owns exact keys, the packed catalog and the replaceable fixture
-  definitions.
+- `shapes` owns exact keys, the packed catalog, generated-artifact codec,
+  extractor interchange schema and the replaceable fixture definitions.
 - `optimizer` owns routing, weighted missing/extra scoring, staged refinement
   and the public/debug APIs.
 - `tools/harness` and `benchmarks` are consumers of the same public API.
@@ -73,8 +73,42 @@ Part masks are held in one packed pool. Multipart shapes additionally have a
 
 Fixture ids begin with `fixture:`. They model confirmed upstream families and
 property/part names but are not claimed to be production registry data. A
-future mod-side extractor can replace the fixture builder without changing the
-optimizer API or packed catalog layout.
+pinned mod-side extractor can replace the fixture builder without changing the
+optimizer API or packed catalog layout once its output has been reviewed and
+promoted.
+
+## Generated catalog boundary
+
+The production boundary is a deterministic two-stage pipeline:
+
+```text
+pinned NeoForge process
+  -> extracted-catalog.json (reviewable registry/state/AABB interchange)
+  -> TypeScript catalog compiler
+  -> generated-shapes.bin + generated-blocks.bin + metadata.json
+```
+
+Both binary files are versioned, explicitly little-endian SoA containers with
+per-section and payload CRC32 checks. They preserve `geometryId` deduplication
+without discarding concrete `shapeId` realizations or part ownership. Loading
+performs bounds, offsets, ID, posting-order, metadata and checksum validation
+before constructing `PackedShapeCatalog`. The compiler decodes its output by
+default, and byte-for-byte determinism is covered against the complete fixture.
+
+The interchange schema accepts only exact integer-lattice AABBs. Unknown real
+blocks use `ShapeFamily.GENERIC`, so the family-independent coarse-mask index
+can route them without pretending that a Java class name implies a supported
+parametric family. Dedicated family mapping and Copycats part extraction are
+version-pinned adapter responsibilities.
+
+Extraction evidence remains metadata rather than optimizer hot-path data. The
+document contains one sorted universe of every registered `BlockItem` and
+sparse per-part material-acceptance profiles. A sparse profile stores only
+items accepted in at least one of the six directions; absence means all six
+directions were rejected because the profile's coverage is
+`COMPLETE_REGISTRY`. The compiler replaces source-local profile references with
+SHA-256 content identities and deduplicates identical behavior without tying
+the identity to a block or part owner.
 
 ## Exact geometry keys
 
@@ -138,13 +172,48 @@ inflating every normal result.
 
 Milestone 2 should add sparse mesh-to-cell rasterization and batch/worker APIs.
 After real workloads exist, profiling can justify an allocation-free
-`optimizeCellInto` path or a Rust/WASM kernel. Production catalog extraction,
-material compatibility, per-part texture fitting, neighbour constraints and
-NBT serialization remain later independent stages.
+`optimizeCellInto` path or a Rust/WASM kernel. Review and promotion of a real
+extracted catalog, material solving, per-part texture fitting, neighbour
+constraint solving and NBT serialization remain later independent stages.
 
 ## Current constraints
 
-- The catalog is a replaceable fixture, not extracted Minecraft registry data.
+- The fixture is still the default catalog. The pinned extractor has completed
+  a local end-to-end production run (60,475 shapes, 2,120 geometries, 63
+  material profiles) and its binaries pass decode/CRC verification, but no
+  reviewed production artifact is committed yet.
+- Full raw extraction evidence remains an offline audit artifact. The measured
+  compact interchange is about 478 MiB and generated metadata about 439 MiB;
+  the browser bundle must split compact runtime indexes from raw neighbour and
+  placement probes before this catalog can replace the fixture in the web app.
+- The extraction command verifies the exact loaded Minecraft, NeoForge, Create,
+  Copycats+ and extractor versions before calling upstream APIs. A missing or
+  mismatched pin aborts extraction rather than producing mixed-version data.
+- The Java exporter certifies Copycats multipart masks only when isolated
+  singleton-state witnesses are contained by the target and their union exactly
+  reconstructs the total GRID16 mask. Ambiguous or non-grid states are omitted
+  with deterministic diagnostics. Copycats cogwheel `shaft` and `cogwheel`
+  parts currently have no singleton witnesses and are therefore omitted with
+  `COPYCATS_MULTIPART_UNSUPPORTED`.
+- Material acceptance covers the complete loaded registry universe of
+  `BlockItem` identities in six directions and preserves the accepted result
+  state. Its profiles are sparse and content-addressed. A version-pinned audited
+  adapter reproduces the predicate with candidate-at-center, air-outside shape
+  reads and explicitly supported overrides; an unknown declaring owner fails
+  the complete profile closed instead of exposing a live `ServerLevel`.
+- Neighbour evidence invokes `updateShape` for air, the same state and stone in
+  every direction through a controlled, non-mutating `LevelAccessor`, then
+  records the resolved state and exact outline. Unknown accessor operations
+  fail the evidence closed; scheduled ticks are suppressed because they cannot
+  affect the synchronous result. Absence of change in this finite sample does
+  not prove independence, so extracted runtime flags remain conservative.
+- Placement evidence invokes `canSurvive` in an empty controlled context and
+  with one stone neighbour in each direction. It does not construct the real
+  item placement context, initialize required block entities or execute
+  `setBlock`, and therefore remains conditional preflight evidence.
+- `sources.environment` fingerprints loaded mod identities, block/item
+  registries, Copycats allow/deny tags and selected datapacks, so equal version
+  labels cannot hide different enumeration inputs.
 - Exact keys accept integer-lattice AABB unions only; slopes or sampled meshes
   cannot be declared exact by this implementation.
 - When multipart masks overlap (for example, boards meeting along an edge), the

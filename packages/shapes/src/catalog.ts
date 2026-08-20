@@ -50,9 +50,13 @@ interface GeometryDraft {
 }
 
 function serializeState(state: ShapeState): string {
-  const entries = Object.entries(state).sort(([left], [right]) => left.localeCompare(right));
+  const entries = Object.entries(state).sort(([left], [right]) => compareStrings(left, right));
   if (entries.length === 0) return '';
   return `[${entries.map(([key, value]) => `${key}=${String(value)}`).join(',')}]`;
+}
+
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function arraysEqual(left: Uint32Array, right: Uint32Array): boolean {
@@ -249,7 +253,7 @@ export class PackedShapeCatalog {
   }
 }
 
-interface PackedShapeCatalogData {
+export interface PackedShapeCatalogData {
   readonly blockIds: readonly string[];
   readonly geometryDescriptors: Float32Array;
   readonly geometryKeys: readonly string[];
@@ -291,7 +295,7 @@ export function buildShapeCatalog(
     const rightState = serializeState(right.state);
     const leftId = left.stableId ?? `${left.blockId}${leftState}`;
     const rightId = right.stableId ?? `${right.blockId}${rightState}`;
-    return leftId.localeCompare(rightId);
+    return compareStrings(leftId, rightId);
   });
 
   const geometries: GeometryDraft[] = [];
@@ -518,7 +522,7 @@ export function buildShapeCatalog(
   geometryRealizationOffsets[geometryCount] = realizationIds.length;
 
   const routeIndex = new Map<string, Uint32Array>();
-  for (const [key, postings] of [...routePostings.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [key, postings] of [...routePostings.entries()].sort(([left], [right]) => compareStrings(left, right))) {
     routeIndex.set(key, Uint32Array.from([...postings].sort((left, right) => left - right)));
   }
 

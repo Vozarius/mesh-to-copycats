@@ -26,6 +26,8 @@ export enum ShapeFamily {
   BYTE = 10,
   BYTE_PANEL = 11,
   BOARD = 12,
+  /** Extracted geometry without a dedicated parametric router. */
+  GENERIC = 255,
 }
 
 export enum QualityMode {
