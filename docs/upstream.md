@@ -106,10 +106,13 @@ TypeScript compiler validates that document and writes deterministic
 integer-lattice outline AABBs receive `GRID16_EXACT:v1`; unsupported geometry or
 uncertifiable multipart states are omitted with diagnostics.
 
-Multipart extraction relies on a same-block singleton-state witness for each
-active Copycats storage key, containment in the target and exact union
-reconstruction. It cannot currently certify cogwheel `shaft`/`cogwheel` parts,
-because the pinned block exposes no singleton states for them. Controlled
+Multipart extraction normally relies on a same-block singleton-state witness
+for each active Copycats storage key, containment in the target and exact union
+reconstruction. The pinned cogwheel family has a separate authoritative rule:
+its public interaction method selects `cogwheel` only in the central axial
+interval `(6/16, 10/16)` and `shaft` elsewhere. The extractor clips the exact
+outline at those integer planes and accepts it only after exact union
+reconstruction. Controlled
 neighbour probes call `updateShape` for air, same-state and stone neighbours and
 record both the resolved state and shape. Placement probes call `canSurvive` in
 empty and six single-stone contexts, but do not replay placement, initialize a

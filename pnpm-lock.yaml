@@ -35,15 +35,12 @@ importers:
 
   apps/web:
     dependencies:
-      '@mesh-to-copycats/minecraft-nbt':
-        specifier: workspace:*
-        version: link:../../packages/minecraft-nbt
       '@mesh-to-copycats/mesh':
         specifier: workspace:*
         version: link:../../packages/mesh
-      '@mesh-to-copycats/shapes':
+      '@mesh-to-copycats/minecraft-nbt':
         specifier: workspace:*
-        version: link:../../packages/shapes
+        version: link:../../packages/minecraft-nbt
       '@mesh-to-copycats/palette':
         specifier: workspace:*
         version: link:../../packages/palette
@@ -106,6 +103,18 @@ importers:
         specifier: workspace:*
         version: link:../voxelizer
 
+  packages/palette:
+    dependencies:
+      '@mesh-to-copycats/mesh':
+        specifier: workspace:*
+        version: link:../mesh
+      '@mesh-to-copycats/shapes':
+        specifier: workspace:*
+        version: link:../shapes
+      '@mesh-to-copycats/voxelizer':
+        specifier: workspace:*
+        version: link:../voxelizer
+
   packages/pipeline:
     dependencies:
       '@mesh-to-copycats/mesh':
@@ -114,18 +123,6 @@ importers:
       '@mesh-to-copycats/optimizer':
         specifier: workspace:*
         version: link:../optimizer
-      '@mesh-to-copycats/shapes':
-        specifier: workspace:*
-        version: link:../shapes
-      '@mesh-to-copycats/voxelizer':
-        specifier: workspace:*
-        version: link:../voxelizer
-
-  packages/palette:
-    dependencies:
-      '@mesh-to-copycats/mesh':
-        specifier: workspace:*
-        version: link:../mesh
       '@mesh-to-copycats/shapes':
         specifier: workspace:*
         version: link:../shapes
@@ -173,6 +170,9 @@ importers:
       '@mesh-to-copycats/mesh':
         specifier: workspace:*
         version: link:../../packages/mesh
+      '@mesh-to-copycats/shapes':
+        specifier: workspace:*
+        version: link:../../packages/shapes
       fflate:
         specifier: ^0.8.3
         version: 0.8.3

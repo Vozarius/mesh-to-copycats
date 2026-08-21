@@ -1,15 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   decodeEmbeddedMeshTextures,
+  createCircleMesh,
+  createPlaneMesh,
+  createSphereMesh,
   finalizeMesh,
   importGlb,
   importObj,
+  transformMesh,
   type PackedTriangleMesh,
 } from '@mesh-to-copycats/mesh';
 import { encodeCreateSchematic, type StructureCell } from '@mesh-to-copycats/minecraft-nbt';
 
 import { EditorScene } from './EditorScene.js';
+import { importImageAsPlane } from './image-mesh.js';
 import type {
   CompleteResponse,
   QualityName,
@@ -40,6 +45,24 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(value);
 }
 
+interface ModelTransformState {
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly offsetZ: number;
+  readonly rotateX: number;
+  readonly rotateY: number;
+  readonly rotateZ: number;
+}
+
+const IDENTITY_TRANSFORM: ModelTransformState = {
+  offsetX: 0,
+  offsetY: 0,
+  offsetZ: 0,
+  rotateX: 0,
+  rotateY: 0,
+  rotateZ: 0,
+};
+
 export function App() {
   const [mesh, setMesh] = useState<PackedTriangleMesh>(() => demoMesh());
   const [filename, setFilename] = useState('demo-taper.glb');
@@ -50,8 +73,21 @@ export function App() {
   const [status, setStatus] = useState<'idle' | 'running' | 'complete' | 'error'>('idle');
   const [error, setError] = useState('');
   const [result, setResult] = useState<CompleteResponse>();
+  const [excludedMaterials, setExcludedMaterials] = useState<ReadonlySet<string>>(() => new Set());
+  const [materialOverrides, setMaterialOverrides] = useState<readonly string[]>(['']);
+  const [selectedMaterialSlot, setSelectedMaterialSlot] = useState(0);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [modelTransform, setModelTransform] = useState<ModelTransformState>(IDENTITY_TRANSFORM);
+  const [imageAlphaThreshold, setImageAlphaThreshold] = useState(16);
+  const overrideUndo = useRef<readonly string[][]>([]);
+  const overrideRedo = useRef<readonly string[][]>([]);
   const worker = useRef<Worker | undefined>(undefined);
   const request = useRef(0);
+  const transformedMesh = useMemo(() => transformMesh(mesh, {
+    rotationDegrees: [modelTransform.rotateX, modelTransform.rotateY, modelTransform.rotateZ],
+    translation: [modelTransform.offsetX, modelTransform.offsetY, modelTransform.offsetZ],
+    uniformScale: scale,
+  }), [mesh, modelTransform, scale]);
 
   useEffect(() => {
     const instance = new Worker(new URL('./optimizer.worker.ts', import.meta.url), { type: 'module' });
@@ -63,6 +99,7 @@ export function App() {
         setProgress({ completed: response.completed, total: response.total });
       } else if (response.type === 'complete') {
         setResult(response);
+        setSettingsDirty(false);
         setProgress({ completed: response.cellX.length, total: response.cellX.length });
         setStatus('complete');
         setView('split');
@@ -76,19 +113,81 @@ export function App() {
     };
   }, []);
 
+  const selectMesh = (nextMesh: PackedTriangleMesh, name: string) => {
+    if (status === 'running' && worker.current !== undefined) {
+      worker.current.postMessage({ requestId: request.current, type: 'cancel' } satisfies WorkerRequest);
+      request.current += 1;
+    }
+    setMesh(nextMesh);
+    setFilename(name);
+    setResult(undefined);
+    setStatus('idle');
+    setView('original');
+    setError('');
+    setMaterialOverrides(Array.from({ length: nextMesh.materialNames.length }, () => ''));
+    setSelectedMaterialSlot(0);
+    overrideUndo.current = [];
+    overrideRedo.current = [];
+    setSettingsDirty(false);
+    setModelTransform(IDENTITY_TRANSFORM);
+  };
+
+  const updateTransform = (key: keyof ModelTransformState, value: number) => {
+    if (!Number.isFinite(value)) return;
+    setModelTransform((current) => ({ ...current, [key]: value }));
+    setSettingsDirty(true);
+  };
+
+  const centerAndGround = () => {
+    const rotated = transformMesh(mesh, {
+      rotationDegrees: [modelTransform.rotateX, modelTransform.rotateY, modelTransform.rotateZ],
+      uniformScale: scale,
+    });
+    setModelTransform((current) => ({
+      ...current,
+      offsetX: -((rotated.bounds[0] ?? 0) + (rotated.bounds[3] ?? 0)) / 2,
+      offsetY: -(rotated.bounds[1] ?? 0),
+      offsetZ: -((rotated.bounds[2] ?? 0) + (rotated.bounds[5] ?? 0)) / 2,
+    }));
+    setSettingsDirty(true);
+  };
+
+  const commitMaterialOverrides = (next: readonly string[]) => {
+    overrideUndo.current = [...overrideUndo.current, [...materialOverrides]];
+    overrideRedo.current = [];
+    setMaterialOverrides([...next]);
+    setSettingsDirty(true);
+  };
+
+  const undoMaterialOverride = () => {
+    const previous = overrideUndo.current.at(-1);
+    if (previous === undefined) return;
+    overrideUndo.current = overrideUndo.current.slice(0, -1);
+    overrideRedo.current = [...overrideRedo.current, [...materialOverrides]];
+    setMaterialOverrides(previous);
+    setSettingsDirty(true);
+  };
+
+  const redoMaterialOverride = () => {
+    const next = overrideRedo.current.at(-1);
+    if (next === undefined) return;
+    overrideRedo.current = overrideRedo.current.slice(0, -1);
+    overrideUndo.current = [...overrideUndo.current, [...materialOverrides]];
+    setMaterialOverrides(next);
+    setSettingsDirty(true);
+  };
+
   const importFile = async (file: File) => {
     const extension = file.name.split('.').pop()?.toLowerCase();
     const imported = extension === 'obj'
       ? importObj(await file.text())
       : extension === 'glb'
         ? decodeEmbeddedMeshTextures(importGlb(await file.arrayBuffer()))
-        : undefined;
-    if (imported === undefined) throw new Error('Choose an .obj or .glb file');
-    setMesh(imported);
-    setFilename(file.name);
-    setResult(undefined);
-    setStatus('idle');
-    setView('original');
+        : file.type.startsWith('image/')
+          ? await importImageAsPlane(file, imageAlphaThreshold)
+          : undefined;
+    if (imported === undefined) throw new Error('Choose an OBJ, GLB or image file');
+    selectMesh(imported, file.name);
   };
 
   const optimize = () => {
@@ -101,29 +200,29 @@ export function App() {
     setProgress({ completed: 0, total: 0 });
     setStatus('running');
     const workerMesh: PackedTriangleMesh = {
-      bounds: mesh.bounds.slice(),
-      indices: mesh.indices.slice(),
-      ...(mesh.materialBaseColorsLinear === undefined
+      bounds: transformedMesh.bounds.slice(),
+      indices: transformedMesh.indices.slice(),
+      ...(transformedMesh.materialBaseColorsLinear === undefined
         ? {}
-        : { materialBaseColorsLinear: mesh.materialBaseColorsLinear.slice() }),
-      materialNames: [...mesh.materialNames],
-      ...(mesh.materialTextureIndexes === undefined
+        : { materialBaseColorsLinear: transformedMesh.materialBaseColorsLinear.slice() }),
+      materialNames: [...transformedMesh.materialNames],
+      ...(transformedMesh.materialTextureIndexes === undefined
         ? {}
-        : { materialTextureIndexes: mesh.materialTextureIndexes.slice() }),
-      positions: mesh.positions.slice(),
-      triangleMaterials: mesh.triangleMaterials.slice(),
-      ...(mesh.textureAtlas === undefined ? {} : {
+        : { materialTextureIndexes: transformedMesh.materialTextureIndexes.slice() }),
+      positions: transformedMesh.positions.slice(),
+      triangleMaterials: transformedMesh.triangleMaterials.slice(),
+      ...(transformedMesh.textureAtlas === undefined ? {} : {
         textureAtlas: {
-          heights: mesh.textureAtlas.heights.slice(),
-          offsets: mesh.textureAtlas.offsets.slice(),
-          rgbaSrgb: mesh.textureAtlas.rgbaSrgb.slice(),
-          widths: mesh.textureAtlas.widths.slice(),
-          wrapS: mesh.textureAtlas.wrapS.slice(),
-          wrapT: mesh.textureAtlas.wrapT.slice(),
+          heights: transformedMesh.textureAtlas.heights.slice(),
+          offsets: transformedMesh.textureAtlas.offsets.slice(),
+          rgbaSrgb: transformedMesh.textureAtlas.rgbaSrgb.slice(),
+          widths: transformedMesh.textureAtlas.widths.slice(),
+          wrapS: transformedMesh.textureAtlas.wrapS.slice(),
+          wrapT: transformedMesh.textureAtlas.wrapT.slice(),
         },
       }),
-      ...(mesh.texcoords === undefined ? {} : { texcoords: mesh.texcoords.slice() }),
-      vertexCount: mesh.vertexCount,
+      ...(transformedMesh.texcoords === undefined ? {} : { texcoords: transformedMesh.texcoords.slice() }),
+      vertexCount: transformedMesh.vertexCount,
     };
     const transferables: Transferable[] = [
       workerMesh.bounds.buffer,
@@ -149,16 +248,22 @@ export function App() {
       );
     }
     worker.current.postMessage({
+      excludedMaterialItemIds: [...excludedMaterials].sort(),
+      materialOverrides,
       mesh: workerMesh,
       quality,
       requestId: request.current,
-      scale,
+      scale: 1,
       type: 'optimize',
     } satisfies WorkerRequest, transferables);
   };
 
   const exportNbt = () => {
     if (result === undefined) return;
+    if (settingsDirty) {
+      setError('Rebuild after changing geometry or material settings before export.');
+      return;
+    }
     if (result.invalidMaterialCells > 0) {
       setError('Resolve every material before exporting a schematic.');
       return;
@@ -194,7 +299,7 @@ export function App() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = `${filename.replace(/\.(?:glb|obj)$/iu, '') || 'formwork'}.nbt`;
+      anchor.download = `${filename.replace(/\.[^.]+$/u, '') || 'formwork'}.nbt`;
       anchor.click();
       URL.revokeObjectURL(url);
       setError('');
@@ -230,8 +335,8 @@ export function App() {
         </div>
         <div className="top-actions">
           <span className={`status-dot ${status}`} />
-          <span>{status === 'running' ? 'Fitting geometry + materials' : status === 'complete' ? 'Ready to inspect' : 'Local workspace'}</span>
-          <button className="export-button" type="button" disabled={result === undefined || result.invalidMaterialCells > 0} onClick={exportNbt}>EXPORT NBT</button>
+          <span>{status === 'running' ? 'Fitting geometry + materials' : settingsDirty ? 'Changes need rebuild' : status === 'complete' ? 'Ready to inspect' : 'Local workspace'}</span>
+          <button className="export-button" type="button" disabled={result === undefined || result.invalidMaterialCells > 0 || settingsDirty || status === 'running'} onClick={exportNbt}>EXPORT NBT</button>
         </div>
       </header>
 
@@ -241,7 +346,7 @@ export function App() {
           <label className="dropzone">
             <input
               type="file"
-              accept=".obj,.glb,model/obj,model/gltf-binary"
+              accept=".obj,.glb,image/*,model/obj,model/gltf-binary"
               onChange={(event) => {
                 const file = event.currentTarget.files?.[0];
                 if (file !== undefined) void importFile(file).catch((reason: unknown) => {
@@ -251,12 +356,22 @@ export function App() {
               }}
             />
             <span className="drop-icon">＋</span>
-            <strong>Drop OBJ or GLB</strong>
+            <strong>Drop OBJ, GLB or image</strong>
             <span>or click to browse</span>
           </label>
           <div className="file-meta">
             <span>{formatNumber(mesh.indices.length / 3)} triangles</span>
             <span>{formatNumber(mesh.positions.length / 3)} vertices</span>
+          </div>
+          <label className="field-label" htmlFor="alpha-threshold">Next image alpha cutoff <b>{imageAlphaThreshold}</b></label>
+          <input id="alpha-threshold" className="range" type="range" min="1" max="255" step="1" value={imageAlphaThreshold} onChange={(event) => {
+            setImageAlphaThreshold(Number(event.currentTarget.value));
+          }} />
+          <span className="field-label">Primitives</span>
+          <div className="primitive-grid">
+            <button type="button" onClick={() => { selectMesh(createPlaneMesh({ width: 4, height: 4 }), 'plane'); }}>PLANE</button>
+            <button type="button" onClick={() => { selectMesh(createCircleMesh({ radius: 2 }), 'circle'); }}>CIRCLE</button>
+            <button type="button" onClick={() => { selectMesh(createSphereMesh({ radius: 2 }), 'sphere'); }}>SPHERE</button>
           </div>
         </section>
 
@@ -265,12 +380,36 @@ export function App() {
           <label className="field-label" htmlFor="scale">Minecraft scale <b>{scale.toFixed(2)}×</b></label>
           <input id="scale" className="range" type="range" min="0.25" max="4" step="0.25" value={scale} onChange={(event) => {
             setScale(Number(event.currentTarget.value));
+            setSettingsDirty(true);
           }} />
+          <span className="field-label">Rotation XYZ (degrees)</span>
+          <div className="transform-grid">
+            {(['rotateX', 'rotateY', 'rotateZ'] as const).map((key, axis) => <label key={key}>
+              <span>{'XYZ'[axis]}</span>
+              <input type="number" step="15" value={modelTransform[key]} onChange={(event) => {
+                updateTransform(key, Number(event.currentTarget.value));
+              }} />
+            </label>)}
+          </div>
+          <span className="field-label">Offset XYZ (blocks)</span>
+          <div className="transform-grid">
+            {(['offsetX', 'offsetY', 'offsetZ'] as const).map((key, axis) => <label key={key}>
+              <span>{'XYZ'[axis]}</span>
+              <input type="number" step="0.25" value={modelTransform[key]} onChange={(event) => {
+                updateTransform(key, Number(event.currentTarget.value));
+              }} />
+            </label>)}
+          </div>
+          <div className="transform-actions">
+            <button type="button" onClick={centerAndGround}>CENTER + GROUND</button>
+            <button type="button" onClick={() => { setModelTransform(IDENTITY_TRANSFORM); setSettingsDirty(true); }}>RESET</button>
+          </div>
           <span className="field-label">Fit quality</span>
           <div className="segmented">
             {(['FAST', 'BALANCED', 'QUALITY'] as const).map((name) => (
               <button type="button" className={quality === name ? 'active' : ''} onClick={() => {
                 setQuality(name);
+                setSettingsDirty(true);
               }} key={name}>{name}</button>
             ))}
           </div>
@@ -286,28 +425,86 @@ export function App() {
           {error.length > 0 && <p className="error">{error}</p>}
         </section>
 
+        <section>
+          <span className="section-index">03 / MATERIALS</span>
+          <label className="field-label" htmlFor="source-material">Source material slot</label>
+          <select id="source-material" className="material-select" value={selectedMaterialSlot} onChange={(event) => {
+            setSelectedMaterialSlot(Number(event.currentTarget.value));
+          }}>
+            {mesh.materialNames.map((name, index) => <option value={index} key={`${index}:${name}`}>{index}: {name || 'unnamed'}</option>)}
+          </select>
+          <label className="field-label" htmlFor="minecraft-material">Minecraft material lock</label>
+          <select
+            id="minecraft-material"
+            className="material-select"
+            disabled={result === undefined}
+            value={materialOverrides[selectedMaterialSlot] ?? ''}
+            onChange={(event) => {
+              const next = [...materialOverrides];
+              next[selectedMaterialSlot] = event.currentTarget.value;
+              commitMaterialOverrides(next);
+            }}
+          >
+            <option value="">AUTO — closest compatible</option>
+            {result?.paletteItemIds.map((itemId) => <option value={itemId} key={itemId}>{itemId}</option>)}
+          </select>
+          <div className="history-buttons">
+            <button type="button" disabled={overrideUndo.current.length === 0} onClick={undoMaterialOverride}>UNDO</button>
+            <button type="button" disabled={overrideRedo.current.length === 0} onClick={redoMaterialOverride}>REDO</button>
+          </div>
+          {materialOverrides.some((itemId) => itemId.length > 0) && <p className="notice">Material locks changed. Rebuild to validate and apply.</p>}
+        </section>
+
         <section className="stats-section">
-          <span className="section-index">03 / REPORT</span>
+          <span className="section-index">04 / REPORT</span>
           <dl>
             <div><dt>Surface cells</dt><dd>{result === undefined ? '—' : formatNumber(result.cellX.length)}</dd></div>
             <div><dt>Mean geometry error</dt><dd>{result === undefined ? '—' : averageError.toFixed(4)}</dd></div>
             <div><dt>Materials</dt><dd>{result === undefined ? '—' : materialCount}</dd></div>
             <div><dt>Unresolved cells</dt><dd>{result === undefined ? '—' : result.invalidMaterialCells}</dd></div>
+            <div><dt>Neighbour changes</dt><dd>{result === undefined ? '—' : result.neighborChangedCells}</dd></div>
             <div><dt>Compute time</dt><dd>{result === undefined ? '—' : `${formatNumber(result.timingsMs.total)} ms`}</dd></div>
             <div><dt>Catalog</dt><dd>{result?.catalog ?? '—'}</dd></div>
           </dl>
           {result !== undefined && materialUsage.length > 0 && <div className="material-list">
-            {materialUsage.map((paletteIndex) => <div key={result.paletteItemIds[paletteIndex]}>
+            {materialUsage.map((paletteIndex) => <button type="button" title="Exclude and rebuild" onClick={() => {
+              const itemId = result.paletteItemIds[paletteIndex];
+              if (itemId !== undefined) setExcludedMaterials((current) => new Set([...current, itemId]));
+              setSettingsDirty(true);
+            }} key={result.paletteItemIds[paletteIndex]}>
               <i style={{ background: `rgb(${Math.round((result.paletteSrgb[paletteIndex * 3] ?? 0.5) * 255)} ${(Math.round((result.paletteSrgb[paletteIndex * 3 + 1] ?? 0.5) * 255))} ${(Math.round((result.paletteSrgb[paletteIndex * 3 + 2] ?? 0.5) * 255))})` }} />
               <span>{(result.paletteItemIds[paletteIndex] ?? '').replace('minecraft:', '')}</span>
-            </div>)}
+            </button>)}
           </div>}
-          {result?.previewTruncated === true && <p className="notice">Preview capped at 250k microvoxels.</p>}
+          {excludedMaterials.size > 0 && <div className="excluded-materials">
+            <p className="notice">{excludedMaterials.size} material(s) excluded. Rebuild to apply.</p>
+            {[...excludedMaterials].sort().map((itemId) => <button type="button" key={itemId} onClick={() => {
+              setExcludedMaterials((current) => {
+                const next = new Set(current);
+                next.delete(itemId);
+                return next;
+              });
+              setSettingsDirty(true);
+            }}>＋ {itemId.replace('minecraft:', '')}</button>)}
+            <button type="button" onClick={() => { setExcludedMaterials(new Set()); setSettingsDirty(true); }}>RESET EXCLUSIONS</button>
+          </div>}
+          {result?.previewTruncated === true && <p className="notice">Preview capped at 250k exact boxes.</p>}
         </section>
       </aside>
 
       <section className="viewport">
-        <EditorScene mesh={mesh} optimizedColors={result?.previewColors} optimizedPositions={result?.previewPositions} view={view} />
+        <EditorScene
+          mesh={transformedMesh}
+          optimizedColors={result?.previewColors}
+          optimizedPaletteIndexes={result?.previewPaletteIndexes}
+          optimizedPositions={result?.previewPositions}
+          optimizedScales={result?.previewScales}
+          paletteTextureHeights={result?.paletteTextureHeights}
+          paletteTextureOffsets={result?.paletteTextureOffsets}
+          paletteTextureRgbaSrgb={result?.paletteTextureRgbaSrgb}
+          paletteTextureWidths={result?.paletteTextureWidths}
+          view={view}
+        />
         <div className="view-tabs" role="group" aria-label="Preview layer">
           {(['original', 'split', 'optimized'] as const).map((mode) => (
             <button key={mode} type="button" className={view === mode ? 'active' : ''} disabled={mode !== 'original' && result === undefined} onClick={() => {

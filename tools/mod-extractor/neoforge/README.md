@@ -53,6 +53,8 @@ operator-enabled integrated or dedicated server, run:
 ```text
 /m2c_extract_catalog
 /m2c_extract_catalog "review-catalog.json"
+/m2c_verify_schematic "verification.nbt" 0 250 0
+/m2c_verify_schematicannon "verification.nbt" 0 250 0 4 250 0
 ```
 
 The output stays inside the run directory's `m2c-extractor/` folder. Compile it
@@ -68,12 +70,32 @@ writes deterministic compact JSON rather than pretty-printed JSON: the complete
 pinned catalog contains tens of thousands of states and raw audit probes are
 too large for whitespace-expanded interchange.
 
-The verified local pinned run exported 60,475 shapes with 2,816 fail-closed
-diagnostics and 63 material profiles in about 14 seconds, including the atomic
-write. TypeScript compilation produced 2,120 unique geometries, 63,696 parts,
-43.77 MiB of shape data and 8.13 MiB of block data. Its 438.91 MiB audit
+`m2c_verify_schematic` accepts only a direct, non-linked `.nbt` file inside the
+run directory's `m2c-extractor/` folder. It caps compressed and expanded size,
+requires a fully loaded empty target volume, places through Minecraft's pinned
+`StructureTemplate`, compares every block state and every explicitly supplied
+Copycats material field, and clears the entire volume even after a failed
+placement attempt. Copycats may canonically add default material entries for
+inactive multipart slots; the verifier permits those additions but requires the
+exported material subtree to survive unchanged.
+
+`m2c_verify_schematicannon` adds the full Create integration check. It stages
+the same bounded input under Create's private uploaded-schematic directory,
+places a real Schematicannon, lets the cannon compute its own `MaterialChecklist`,
+supplies exactly those stacks through an `IItemHandler`, consumes gunpowder,
+runs the real flying-block lifecycle to completion, and then performs the same
+exact state/material verification. It additionally proves that every exported
+Copycats `consumedItem` appears in the cannon checklist. Staged files, cannon
+and target volume are removed in `finally`, including failed runs. The verified
+production sample consumed eight Copycat Board items and eight independent part
+materials across two multipart block entities.
+
+The verified local pinned run exported 60,479 shapes with 2,812 fail-closed
+diagnostics and 67 material profiles in about 21 seconds, including the atomic
+write. TypeScript compilation produced 2,120 unique geometries, 63,704 parts,
+43.79 MiB of shape data and 8.13 MiB of block data. Its 439.60 MiB audit
 metadata is not suitable for browser delivery and must be separated from the
-future runtime catalog.
+5.31 MiB runtime catalog.
 
 The command sorts resource locations, states, properties and AABBs. It refuses
 any coordinate that is not exactly on the integer `0..16` lattice; it never
@@ -92,8 +114,11 @@ material slots are assigned in sorted-key order.
 
 Unsupported or ambiguous multipart realizations are omitted with a deterministic
 `COPYCATS_MULTIPART_UNSUPPORTED` diagnostic instead of being mislabeled as a
-single-material shape. In particular, Copycats cogwheels expose `shaft` and
-`cogwheel` keys but no singleton state, so their part volumes remain unsupported.
+single-material shape. The pinned small and large cogwheel family uses its
+authoritative interaction ownership instead of a singleton witness: `cogwheel`
+owns the central axial GRID16 slice 6..10 and `shaft` owns the remaining two
+slices. The clipped parts are accepted only when their union reconstructs the
+authoritative outline exactly.
 
 Material acceptance is evaluated for every registered `BlockItem` identity,
 including distinct items that target the same block, in the explicit direction

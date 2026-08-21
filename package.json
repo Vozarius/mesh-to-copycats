@@ -19,6 +19,7 @@
     "web:dev": "pnpm --filter @mesh-to-copycats/web dev",
     "web:build": "pnpm --filter @mesh-to-copycats/web build",
     "materials:verify": "tsx tools/harness/src/verify-materials.ts",
+    "neighbors:compile": "node --max-old-space-size=4096 --import tsx tools/mod-extractor/src/compile-neighbors.ts",
     "palette:generate": "tsx tools/palette-generator/src/generate.ts",
     "schematic:verify": "tsx tools/harness/src/verify-schematic.ts"
   },

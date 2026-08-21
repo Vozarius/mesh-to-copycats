@@ -10,7 +10,11 @@ import {
   resolveMaterials,
 } from '../../../packages/palette/src/index.js';
 import { optimizeMesh } from '../../../packages/pipeline/src/index.js';
-import { decodeWebRuntimeCatalog } from '../../../packages/shapes/src/index.js';
+import {
+  decodeNeighborTransitions,
+  decodeWebRuntimeCatalog,
+  resolveSparseNeighbors,
+} from '../../../packages/shapes/src/index.js';
 
 function readBytes(path: string): Uint8Array {
   const bytes = readFileSync(path);
@@ -48,13 +52,19 @@ const mesh = finalizeMesh({
   triangleMaterials: Array.from({ length: 12 }, () => 0),
 });
 const optimized = optimizeMesh({ catalog: runtime.catalog, mesh });
+const neighborResolution = resolveSparseNeighbors({
+  catalog: runtime.catalog,
+  shapeIds: optimized.shapeIds,
+  surface: optimized.surface,
+  transitions: decodeNeighborTransitions(readBytes(resolve(directory, 'neighbor-transitions.bin'))),
+});
 const samples = extractSurfaceSamples(mesh, optimized.surface);
 const palette = loadGeneratedMaterialPalette(
   readFileSync(resolve(directory, 'material-palette.json'), 'utf8'),
 );
 const materials = resolveMaterials({
   catalog: runtime.catalog,
-  geometryIds: optimized.geometryIds,
+  geometryIds: neighborResolution.geometryIds,
   palette,
   runtime,
   samples,
@@ -63,8 +73,27 @@ const invalid = materials.invalidCells.reduce((sum, value) => sum + value, 0);
 if (optimized.surface.cellCount === 0 || invalid !== 0) {
   throw new Error(`Material verification failed: ${optimized.surface.cellCount} cells, ${invalid} invalid`);
 }
+const forcedItemId = 'minecraft:red_concrete';
+const forcedPaletteIndex = palette.itemIds.indexOf(forcedItemId);
+if (forcedPaletteIndex < 0) throw new Error(`Production palette is missing ${forcedItemId}`);
+const forced = resolveMaterials({
+  catalog: runtime.catalog,
+  geometryIds: neighborResolution.geometryIds,
+  palette,
+  runtime,
+  samples,
+  sourceMaterialPaletteIndexes: Uint32Array.of(forcedPaletteIndex),
+});
+if (
+  forced.invalidCells.some((value) => value !== 0) ||
+  forced.paletteIndexes.some((index) => index !== forcedPaletteIndex)
+) {
+  throw new Error(`Production source material lock did not resolve to ${forcedItemId}`);
+}
 process.stdout.write(`${JSON.stringify({
   cells: optimized.surface.cellCount,
+  neighborChanges: neighborResolution.changedCells,
+  forcedMaterial: forcedItemId,
   materials: Array.from(new Set(Array.from(materials.paletteIndexes)))
     .map((index) => palette.itemIds[index] ?? 'invalid'),
   selectedBlocks: Array.from(new Set(Array.from(materials.shapeIds)

@@ -1,11 +1,12 @@
 # mesh-to-copycats
 
 Deterministic, data-oriented geometry fitting for Minecraft 1.21.1, Create and
-Copycats+. The repository implements the geometry core and the non-UI portion
-of milestone 2: packed OBJ/GLB meshes, sparse cell discovery, adaptive
+Copycats+. The repository implements an end-to-end local MVP: packed
+OBJ/GLB/image meshes, sparse cell discovery, adaptive
 multi-resolution scoring, a production generated catalog, multi-part geometry
-candidates, exact identities, typed batch APIs, tests, a CLI harness and
-benchmarks.
+candidates, exact identities, per-part material solving, neighbour resolution,
+a React/Three editor, deterministic Create NBT export, typed batch APIs, tests,
+a CLI harness and benchmarks.
 
 See [docs/architecture.md](docs/architecture.md) for the design and current
 scope, and [docs/upstream.md](docs/upstream.md) for the upstream source audit.
@@ -23,7 +24,8 @@ pnpm catalog:compile -- --input path/to/extracted-catalog.json --out generated/c
 pnpm catalog:verify -- generated/catalog
 pnpm materials:verify -- generated/catalog
 pnpm palette:generate -- --catalog generated/catalog --jar minecraft-client.jar --jar create.jar --jar copycats.jar --out generated/catalog/material-palette.json
-pnpm schematic:verify -- generated/catalog
+pnpm neighbors:compile -- generated/catalog
+pnpm schematic:verify -- generated/catalog --out verification.nbt
 pnpm web:dev
 pnpm web:build
 ```
@@ -50,19 +52,20 @@ The repository now also includes packed OBJ/GLB import, triangle-centric sparse
 surface rasterization, lazy per-cell 16³ masks, typed-array batch optimization
 and a fetch-based web-runtime catalog loader. Per-part material solving, the
 React/Three editor and deterministic gzip-compressed Create structure NBT export
-are integrated. Neighbour resolution and exact rendered block meshes remain
-later stages.
+are integrated. Neighbour resolution, generated texture palettes and exact
+GRID16 block previews are integrated as well.
 
-A full pinned extraction has now been exercised end to end locally: 60,475
+A full pinned extraction has now been exercised end to end locally: 60,479
 accepted state realizations compile to 2,120 unique geometries. The browser
-catalog is 43.77 MiB shapes + 8.13 MiB blocks + 4.64 MiB runtime metadata; the
+catalog is 43.79 MiB shapes + 8.13 MiB blocks + 5.31 MiB runtime metadata; the
 core metadata is 584 bytes. Full controlled probe evidence remains available
-as a separate 438.91 MiB offline audit artifact. `pnpm catalog:verify` validates
+as a separate 439.60 MiB offline audit artifact. `pnpm catalog:verify` validates
 all checksums and confirms an exact optimizer selection for all 2,120 catalog
 geometries.
 
-`apps/web` is the first editor surface. It imports OBJ/GLB locally, renders the
-source mesh with Three.js, loads the production web catalog inside a Worker and
+`apps/web` is the first editor surface. It imports OBJ/GLB and browser-decodable
+images locally, offers plane/circle/sphere primitives, renders the source mesh
+with Three.js, loads the production web catalog inside a Worker and
 progressively returns a packed sparse optimized grid. It extracts bounded
 per-cell surface samples, matches per-part colors in OKLab, validates Copycats
 materials against the runtime acceptance profiles, and then chooses among
@@ -71,13 +74,46 @@ views can be switched without sending the 439 MiB extraction audit to the
 browser. Valid resolved grids can be downloaded directly as `.nbt`; Copycat
 block entities include exact material BlockStates, consumed ItemStacks and
 multipart storage keys required by Schematicannon material accounting.
+The pinned NeoForge runtime verifier has loaded the exported multipart NBT both
+through Minecraft's `StructureTemplate` and through a real Create
+Schematicannon. The cannon built two Copycat Board block entities in 23
+controlled ticks, consumed its own checklist (`copycat_board×8`, `stone×6`,
+`acacia_window×2`), preserved all eight exported per-part materials, and then
+the verifier removed the cannon and test structure.
+The optimized preview greedily boxes every selected part's exact 16³ mask.
+Clicking a reported material excludes it from the next solve; entries can be
+restored individually or reset from the sidebar.
+Each OBJ/GLB source material slot can also be locked to a specific generated
+Minecraft material. Locks are checked through the same per-part compatibility,
+acceptance and placement pipeline as automatic matches, support undo/redo, and
+make the previous result non-exportable until it has been rebuilt.
+The editor applies uniform Minecraft scale, XYZ rotation and block-space
+translation to both the Three preview and the Worker input, with Center + Ground
+and Reset controls. Source preview rendering preserves per-triangle material
+groups, linear base-color factors, alpha and every decoded embedded texture.
+
+Neighbour updates are compiled from the offline extraction evidence into a
+7.01 MiB checksummed sparse binary (546,579 changed probes), rather than being
+copied into JSON. The Worker applies exact `(center state, direction, neighbour
+state)` transitions with bounded coordinate descent before material
+canonicalization. Unprobed neighbour identities and multi-neighbour interactions
+remain conservative: they are not generalized from `air/same/stone` evidence.
 
 GLB `baseColorFactor` is retained as a linear material multiplier, matching the
 [official glTF 2.0 contract](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-material-pbrmetallicroughness-basecolorfactor).
 Embedded non-interlaced PNG `baseColorTexture` images are decoded into a packed
 RGBA atlas and sampled through UVs before OKLab matching. A deterministic
 resource-JAR generator resolves blockstates, inherited models, texture aliases,
-indexed PNG palettes and exact texture signatures. The pinned production output
-contains 759 of 760 accepted material items (only `create:limestone` lacks a
-resolvable texture). JPEG, external GLB images, tint-index biome colors and
-resource-pack overrides beyond the supplied JAR order remain explicit limits.
+indexed PNG palettes and exact texture signatures. It also embeds a deterministic
+16×16 first-frame preview for each resolved material (759 textures / 777,216 raw
+RGBA bytes; 1.24 MB JSON). The pinned production output contains 759 of 760
+accepted material items (only `create:limestone` lacks a
+resolvable texture). External GLB images, tint-index biome colors and resource-
+pack overrides beyond the supplied JAR order remain explicit limits. Imported
+image alpha is converted into greedy sparse rectangles before rasterization;
+the adjustable cutoff removes transparent background from geometry while
+preserving exact UVs and full-image aspect ratio.
+Optimized GRID16 boxes are grouped by palette index and rendered with these
+nearest-filtered Minecraft textures. Copycat face cropping, connected textures
+and biome tint remain approximations in the debug preview; exported BlockStates
+and material NBT are unaffected.

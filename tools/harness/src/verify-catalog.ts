@@ -36,6 +36,32 @@ const webCatalog = decodeWebRuntimeCatalog({
   shapes: readBytes(paths.shapes),
 });
 const catalog = webCatalog.catalog;
+
+const pinnedCogwheelBlocks = [
+  'copycats:copycat_cogwheel',
+  'copycats:copycat_large_cogwheel',
+] as const;
+const pinnedCogwheelShapes: Record<string, number> = {};
+for (const blockId of pinnedCogwheelBlocks) {
+  const shapeIds = catalog.blockIds.flatMap((candidate, shapeId) =>
+    candidate === blockId ? [shapeId] : []);
+  if (shapeIds.length === 0) {
+    throw new Error(`Production catalog is missing pinned multipart family ${blockId}`);
+  }
+  for (const shapeId of shapeIds) {
+    const parts = catalog.getShapeParts(shapeId);
+    const keys = parts.map((part) => part.key);
+    if (keys.length !== 2 || keys[0] !== 'cogwheel' || keys[1] !== 'shaft') {
+      throw new Error(`${blockId} shape ${shapeId} does not preserve cogwheel/shaft parts`);
+    }
+    const ownerGrid = catalog.getOwnerGrid16(shapeId);
+    if (ownerGrid === undefined || !ownerGrid.includes(0) || !ownerGrid.includes(1)) {
+      throw new Error(`${blockId} shape ${shapeId} does not preserve both part owners`);
+    }
+  }
+  pinnedCogwheelShapes[blockId] = shapeIds.length;
+}
+
 const optimizer = new GeometryOptimizer({
   catalog,
   settings: { qualityMode: QualityMode.QUALITY },
@@ -77,5 +103,6 @@ process.stdout.write(`${JSON.stringify({
     exactSelections: catalog.geometryCount,
     stageTotals: batch.stageTotals,
   },
+  pinnedMultipart: pinnedCogwheelShapes,
   verified: true,
 }, undefined, 2)}\n`);

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 
@@ -162,11 +163,28 @@ function textureSignature(blockId: string): string {
   return signature;
 }
 
-function averageTexture(path: string): readonly [number, number, number] | undefined {
+const decodedTextureCache = new Map<string, ReturnType<typeof decodePng> | undefined>();
+function decodedTexture(path: string): ReturnType<typeof decodePng> | undefined {
+  if (decodedTextureCache.has(path)) return decodedTextureCache.get(path);
   const bytes = resources.get(path);
-  if (bytes === undefined) return undefined;
+  if (bytes === undefined) {
+    decodedTextureCache.set(path, undefined);
+    return undefined;
+  }
   try {
     const image = decodePng(bytes);
+    decodedTextureCache.set(path, image);
+    return image;
+  } catch {
+    decodedTextureCache.set(path, undefined);
+    return undefined;
+  }
+}
+
+function averageTexture(path: string): readonly [number, number, number] | undefined {
+  const image = decodedTexture(path);
+  if (image === undefined) return undefined;
+  try {
     let red = 0;
     let green = 0;
     let blue = 0;
@@ -183,6 +201,26 @@ function averageTexture(path: string): readonly [number, number, number] | undef
   } catch {
     return undefined;
   }
+}
+
+function previewTexture(paths: readonly string[]): string | undefined {
+  const image = paths.map(decodedTexture).find((value) => value !== undefined);
+  if (image === undefined) return undefined;
+  const size = 16;
+  const frameHeight = image.height > image.width && image.height % image.width === 0
+    ? image.width
+    : image.height;
+  const rgba = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y += 1) {
+    const sourceY = Math.min(frameHeight - 1, Math.floor((y + 0.5) * frameHeight / size));
+    for (let x = 0; x < size; x += 1) {
+      const sourceX = Math.min(image.width - 1, Math.floor((x + 0.5) * image.width / size));
+      const source = (sourceY * image.width + sourceX) * 4;
+      const target = (y * size + x) * 4;
+      rgba.set(image.rgba.subarray(source, source + 4), target);
+    }
+  }
+  return Buffer.from(rgba).toString('base64');
 }
 
 const runtime = JSON.parse(readFileSync(resolve(catalogDirectory, 'runtime-metadata.json'), 'utf8')) as Json;
@@ -256,6 +294,11 @@ for (const itemId of [...acceptedItems].sort()) {
     missing.push(itemId);
     continue;
   }
+  const previewRgbaBase64 = previewTexture(texturePaths);
+  if (previewRgbaBase64 === undefined) {
+    missing.push(itemId);
+    continue;
+  }
   entries.push({
     blockId,
     canonicalBlockIds: ordinaryCatalogBlocks.filter((candidate) =>
@@ -263,6 +306,8 @@ for (const itemId of [...acceptedItems].sort()) {
       texturePaths.length > 0 && textureSignature(candidate) === texturePaths.join('|')),
     itemId,
     preference: materialPreference(itemId),
+    previewRgbaBase64,
+    previewSize: 16,
     srgb: [0, 1, 2].map((channel) =>
       colors.reduce((sum, color) => sum + color[channel]!, 0) / colors.length),
   });

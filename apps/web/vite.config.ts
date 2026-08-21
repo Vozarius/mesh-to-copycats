@@ -11,6 +11,7 @@ const catalogFiles = new Set([
   'generated-shapes.bin',
   'metadata.json',
   'material-palette.json',
+  'neighbor-transitions.bin',
   'runtime-metadata.json',
 ]);
 
@@ -50,6 +51,27 @@ function productionCatalog(): Plugin {
 }
 
 export default defineConfig({
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              maxSize: 450_000,
+              name: 'three-vendor',
+              priority: 20,
+              test: /node_modules[\\/]three[\\/]/,
+            },
+            {
+              name: 'react-vendor',
+              priority: 10,
+              test: /node_modules[\\/](?:react|react-dom|scheduler)[\\/]/,
+            },
+          ],
+        },
+      },
+    },
+  },
   plugins: [react(), productionCatalog()],
   root: import.meta.dirname,
   server: { host: '127.0.0.1' },

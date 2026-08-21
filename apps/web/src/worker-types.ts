@@ -3,6 +3,8 @@ import type { PackedTriangleMesh } from '@mesh-to-copycats/mesh';
 export type QualityName = 'BALANCED' | 'FAST' | 'QUALITY';
 
 export interface OptimizeRequest {
+  readonly excludedMaterialItemIds: readonly string[];
+  readonly materialOverrides: readonly string[];
   readonly mesh: PackedTriangleMesh;
   readonly quality: QualityName;
   readonly requestId: number;
@@ -34,15 +36,23 @@ export interface CompleteResponse {
   readonly cellZ: Int32Array;
   readonly errors: Float32Array;
   readonly invalidMaterialCells: number;
+  readonly neighborChangedCells: number;
+  readonly neighborIterations: number;
   readonly materialErrors: Float32Array;
   readonly materialDirections: Uint8Array;
   readonly paletteIndexes: Uint32Array;
   readonly paletteItemIds: readonly string[];
   readonly paletteSrgb: Float32Array;
+  readonly paletteTextureHeights: Uint16Array;
+  readonly paletteTextureOffsets: Uint32Array;
+  readonly paletteTextureRgbaSrgb: Uint8Array;
+  readonly paletteTextureWidths: Uint16Array;
   readonly partIds: Uint8Array;
   readonly partKeys: readonly string[];
   readonly previewColors: Float32Array;
   readonly previewPositions: Float32Array;
+  readonly previewPaletteIndexes: Uint32Array;
+  readonly previewScales: Float32Array;
   readonly previewTruncated: boolean;
   readonly requestId: number;
   readonly shapeIds: Uint32Array;
@@ -50,6 +60,7 @@ export interface CompleteResponse {
   readonly shapeStates: readonly string[];
   readonly timingsMs: {
     readonly materials: number;
+    readonly neighbors: number;
     readonly optimization: number;
     readonly rasterization: number;
     readonly total: number;

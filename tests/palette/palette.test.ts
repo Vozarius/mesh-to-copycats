@@ -4,6 +4,7 @@ import { finalizeMesh } from '../../packages/mesh/src/index.js';
 import {
   createMaterialPalette,
   extractSurfaceSamples,
+  filterMaterialPalette,
   linearSrgbToOklab,
   loadGeneratedMaterialPalette,
   resolveMaterials,
@@ -57,6 +58,8 @@ describe('generated material palette', () => {
         blockId: 'minecraft:stone',
         canonicalBlockIds: ['minecraft:stone_slab'],
         itemId: 'minecraft:stone',
+        previewRgbaBase64: '/wAA/w==',
+        previewSize: 1,
         srgb: [0.5, 0.5, 0.5],
       }],
       missing: [],
@@ -68,6 +71,30 @@ describe('generated material palette', () => {
     expect(palette.itemIds).toEqual(['minecraft:stone']);
     expect(palette.canonicalBlockIds[0]).toEqual(['minecraft:stone', 'minecraft:stone_slab']);
     expect(palette.oklab).toHaveLength(3);
+    expect(Array.from(palette.previewTextureAtlas?.rgbaSrgb ?? [])).toEqual([255, 0, 0, 255]);
+  });
+
+  it('re-packs deterministic user material exclusions', () => {
+    const palette = createMaterialPalette([
+      { blockId: 'minecraft:stone', itemId: 'minecraft:stone', srgb: [0.5, 0.5, 0.5] },
+      { blockId: 'minecraft:bricks', itemId: 'minecraft:bricks', preference: 7, srgb: [0.6, 0.3, 0.2] },
+    ]);
+    const paletteWithTextures = {
+      ...palette,
+      previewTextureAtlas: {
+        heights: Uint16Array.of(1, 1),
+        offsets: Uint32Array.of(0, 4, 8),
+        rgbaSrgb: Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8),
+        widths: Uint16Array.of(1, 1),
+        wrapS: Uint32Array.of(10497, 10497),
+        wrapT: Uint32Array.of(10497, 10497),
+      },
+    };
+    const filtered = filterMaterialPalette(paletteWithTextures, (itemId) => itemId !== 'minecraft:stone');
+    expect(filtered.itemIds).toEqual(['minecraft:bricks']);
+    expect(filtered.blockIds).toEqual(['minecraft:bricks']);
+    expect(filtered.preference[0]).toBe(7);
+    expect(Array.from(filtered.previewTextureAtlas?.rgbaSrgb ?? [])).toEqual([5, 6, 7, 8]);
   });
 });
 
@@ -117,5 +144,42 @@ describe('post-material realization selection', () => {
     expect(resolved.paletteIndexes[0]).toBe(0);
     expect(resolved.materialDirections[0]).toBe(4);
     expect(resolved.acceptedMaterialBlockIds[0]).toBe('minecraft:stone');
+  });
+
+  it('honors a source material lock while retaining realization validation', () => {
+    const catalog = getFixtureCatalog();
+    const fullShape = catalog.findShapeId('fixture:full_cube', {})!;
+    const geometryIds = Uint32Array.from([catalog.shapeGeometry[fullShape]!]);
+    const palette = createMaterialPalette([
+      { blockId: 'minecraft:stone', itemId: 'minecraft:stone', srgb: [0.5, 0.5, 0.5] },
+      { blockId: 'minecraft:red_concrete', itemId: 'minecraft:red_concrete', srgb: [0.8, 0.1, 0.1] },
+    ]);
+    const resolved = resolveMaterials({
+      catalog,
+      geometryIds,
+      palette,
+      samples,
+      sourceMaterialPaletteIndexes: Uint32Array.of(1),
+    });
+
+    expect(catalog.blockIds[resolved.shapeIds[0]!]).toMatch(/^fixture:copycat_/u);
+    expect(resolved.invalidCells[0]).toBe(0);
+    expect(Array.from(resolved.paletteIndexes).every((index) => index === 1)).toBe(true);
+    expect(resolved.acceptedMaterialBlockIds.every((blockId) => blockId === 'minecraft:red_concrete')).toBe(true);
+  });
+
+  it('rejects an out-of-range source material lock', () => {
+    const catalog = getFixtureCatalog();
+    const fullShape = catalog.findShapeId('fixture:full_cube', {})!;
+    const palette = createMaterialPalette([
+      { blockId: 'minecraft:stone', itemId: 'minecraft:stone', srgb: [0.5, 0.5, 0.5] },
+    ]);
+    expect(() => resolveMaterials({
+      catalog,
+      geometryIds: Uint32Array.of(catalog.shapeGeometry[fullShape]!),
+      palette,
+      samples,
+      sourceMaterialPaletteIndexes: Uint32Array.of(1),
+    })).toThrow(/out of range/u);
   });
 });

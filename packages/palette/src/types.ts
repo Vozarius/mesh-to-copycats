@@ -17,6 +17,7 @@ export interface PackedMaterialPalette {
   readonly linearRgb: Float32Array;
   readonly oklab: Float32Array;
   readonly preference: Uint16Array;
+  readonly previewTextureAtlas?: import('../../mesh/src/index.js').PackedTextureAtlas;
   readonly size: number;
   readonly srgb: Float32Array;
 }
@@ -54,6 +55,8 @@ export interface ResolveMaterialOptions {
   readonly palette: PackedMaterialPalette;
   readonly runtime?: import('../../shapes/src/index.js').WebRuntimeCatalog;
   readonly samples: PackedSurfaceSamples;
+  /** Palette index per source mesh material, or 0xffffffff for automatic matching. */
+  readonly sourceMaterialPaletteIndexes?: Uint32Array;
 }
 
 export interface PackedResolvedMaterials {

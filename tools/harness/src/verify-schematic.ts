@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 import { encodeCreateSchematic, type StructureCell } from '../../../packages/minecraft-nbt/src/index.js';
 import { finalizeMesh } from '../../../packages/mesh/src/index.js';
@@ -12,7 +12,12 @@ import {
   resolveMaterials,
 } from '../../../packages/palette/src/index.js';
 import { optimizeMesh } from '../../../packages/pipeline/src/index.js';
-import { decodeWebRuntimeCatalog } from '../../../packages/shapes/src/index.js';
+import {
+  decodeNeighborTransitions,
+  decodeWebRuntimeCatalog,
+  EVIDENCE_DIRECTIONS,
+  resolveSparseNeighbors,
+} from '../../../packages/shapes/src/index.js';
 
 function readBytes(path: string): Uint8Array {
   const bytes = readFileSync(path);
@@ -20,6 +25,11 @@ function readBytes(path: string): Uint8Array {
 }
 
 const directory = resolve(process.argv[2] ?? 'generated/catalog');
+const outputFlag = process.argv.indexOf('--out');
+if (outputFlag >= 0 && (process.argv[outputFlag + 1] === undefined || outputFlag + 2 < process.argv.length)) {
+  throw new Error('Usage: verify-schematic [catalog-directory] [--out output.nbt]');
+}
+const outputPath = outputFlag >= 0 ? resolve(process.argv[outputFlag + 1]!) : undefined;
 const runtime = decodeWebRuntimeCatalog({
   blocks: readBytes(resolve(directory, 'generated-blocks.bin')),
   metadata: readFileSync(resolve(directory, 'metadata.json'), 'utf8'),
@@ -41,12 +51,18 @@ const mesh = finalizeMesh({
   triangleMaterials: Array.from({ length: 12 }, () => 0),
 });
 const optimized = optimizeMesh({ catalog: runtime.catalog, mesh });
+const neighborResolution = resolveSparseNeighbors({
+  catalog: runtime.catalog,
+  shapeIds: optimized.shapeIds,
+  surface: optimized.surface,
+  transitions: decodeNeighborTransitions(readBytes(resolve(directory, 'neighbor-transitions.bin'))),
+});
 const palette = loadGeneratedMaterialPalette(
   readFileSync(resolve(directory, 'material-palette.json'), 'utf8'),
 );
 const materials = resolveMaterials({
   catalog: runtime.catalog,
-  geometryIds: optimized.geometryIds,
+  geometryIds: neighborResolution.geometryIds,
   palette,
   runtime,
   samples: extractSurfaceSamples(mesh, optimized.surface),
@@ -80,15 +96,68 @@ const cells: StructureCell[] = Array.from(materials.shapeIds, (shapeId, cell) =>
     z: optimized.surface.cellZ[cell] ?? 0,
   };
 });
+let verifiedMultipart: { blockId: string; partCount: number } | undefined;
+for (let shapeId = 0; shapeId < runtime.catalog.shapeCount && verifiedMultipart === undefined; shapeId += 1) {
+  const blockId = runtime.catalog.blockIds[shapeId] ?? '';
+  const partStart = runtime.catalog.shapePartOffsets[shapeId] ?? 0;
+  const partEnd = runtime.catalog.shapePartOffsets[shapeId + 1] ?? partStart;
+  if (!blockId.startsWith('copycats:') || partEnd - partStart < 2) continue;
+  const parts = [];
+  for (let localPart = 0; localPart < partEnd - partStart; localPart += 1) {
+    const profile = runtime.getPartMaterialProfile(shapeId, localPart);
+    let accepted: { blockId: string; state: string } | undefined;
+    let itemId = '';
+    for (const result of profile.results) {
+      for (const direction of EVIDENCE_DIRECTIONS) {
+        const directionResult = result.directions[direction];
+        if (directionResult === null) continue;
+        accepted = directionResult;
+        itemId = result.itemId;
+        break;
+      }
+      if (accepted !== undefined) break;
+    }
+    if (accepted === undefined) {
+      parts.length = 0;
+      break;
+    }
+    parts.push({
+      blockId: accepted.blockId,
+      itemId,
+      key: runtime.catalog.partKeys[partStart + localPart] ?? '',
+      state: accepted.state,
+    });
+  }
+  if (parts.length !== partEnd - partStart) continue;
+  cells.push({
+    blockId,
+    parts,
+    state: runtime.catalog.states[shapeId] ?? '',
+    x: 2,
+    y: 0,
+    z: 0,
+  });
+  verifiedMultipart = { blockId, partCount: parts.length };
+}
+if (verifiedMultipart === undefined) {
+  throw new Error('No production multipart Copycat with accepted material evidence was found');
+}
 const schematic = encodeCreateSchematic({ cells });
+if (outputPath !== undefined) {
+  mkdirSync(dirname(outputPath), { recursive: true });
+  writeFileSync(outputPath, schematic.bytes);
+}
 const raw = gunzipSync(schematic.bytes);
 if (raw[0] !== 10 || raw.length < 32) throw new Error('Encoded schematic is not an NBT root compound');
 process.stdout.write(`${JSON.stringify({
   blockCount: schematic.blockCount,
   compressedBytes: schematic.bytes.byteLength,
   paletteSize: schematic.paletteSize,
+  neighborChanges: neighborResolution.changedCells,
+  outputPath,
   rawBytes: raw.byteLength,
   selectedBlocks: Array.from(new Set(cells.map(({ blockId }) => blockId))),
   size: schematic.size,
+  verifiedMultipart,
   valid: true,
 }, undefined, 2)}\n`);

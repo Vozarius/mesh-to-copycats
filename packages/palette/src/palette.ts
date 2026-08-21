@@ -86,3 +86,59 @@ export function createStarterMinecraftPalette(): PackedMaterialPalette {
     srgb: hexToSrgb(color),
   })));
 }
+
+export function filterMaterialPalette(
+  palette: PackedMaterialPalette,
+  keep: (itemId: string, index: number) => boolean,
+): PackedMaterialPalette {
+  const entries: MaterialPaletteEntry[] = [];
+  const keptIndexes: number[] = [];
+  for (let index = 0; index < palette.size; index += 1) {
+    const itemId = palette.itemIds[index] ?? '';
+    if (!keep(itemId, index)) continue;
+    keptIndexes.push(index);
+    entries.push({
+      blockId: palette.blockIds[index] ?? '',
+      canonicalBlockIds: palette.canonicalBlockIds[index] ?? [],
+      compatibility: palette.compatibility[index] ?? 0,
+      itemId,
+      preference: palette.preference[index] ?? 0,
+      srgb: [
+        palette.srgb[index * 3] ?? 0,
+        palette.srgb[index * 3 + 1] ?? 0,
+        palette.srgb[index * 3 + 2] ?? 0,
+      ],
+    });
+  }
+  if (entries.length === 0) throw new Error('Material exclusions removed every palette entry');
+  const filtered = createMaterialPalette(entries);
+  const sourceAtlas = palette.previewTextureAtlas;
+  if (sourceAtlas === undefined) return filtered;
+  const offsets = new Uint32Array(keptIndexes.length + 1);
+  const widths = new Uint16Array(keptIndexes.length);
+  const heights = new Uint16Array(keptIndexes.length);
+  const wrapS = new Uint32Array(keptIndexes.length);
+  const wrapT = new Uint32Array(keptIndexes.length);
+  let byteLength = 0;
+  for (let target = 0; target < keptIndexes.length; target += 1) {
+    const source = keptIndexes[target] ?? 0;
+    offsets[target] = byteLength;
+    byteLength += (sourceAtlas.offsets[source + 1] ?? 0) - (sourceAtlas.offsets[source] ?? 0);
+    widths[target] = sourceAtlas.widths[source] ?? 0;
+    heights[target] = sourceAtlas.heights[source] ?? 0;
+    wrapS[target] = sourceAtlas.wrapS[source] ?? 10497;
+    wrapT[target] = sourceAtlas.wrapT[source] ?? 10497;
+  }
+  offsets[keptIndexes.length] = byteLength;
+  const rgbaSrgb = new Uint8Array(byteLength);
+  for (let target = 0; target < keptIndexes.length; target += 1) {
+    const source = keptIndexes[target] ?? 0;
+    const start = sourceAtlas.offsets[source] ?? 0;
+    const end = sourceAtlas.offsets[source + 1] ?? start;
+    rgbaSrgb.set(sourceAtlas.rgbaSrgb.subarray(start, end), offsets[target]);
+  }
+  return {
+    ...filtered,
+    previewTextureAtlas: { heights, offsets, rgbaSrgb, widths, wrapS, wrapT },
+  };
+}

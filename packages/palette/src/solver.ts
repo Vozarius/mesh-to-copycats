@@ -171,6 +171,7 @@ function evaluateRealization(
   cell: number,
   shapeId: number,
   ownerCache: Map<number, Uint8Array>,
+  sourceMaterialPaletteIndexes: Uint32Array | undefined,
 ): EvaluatedRealization {
   const start = catalog.shapePartOffsets[shapeId] ?? 0;
   const end = catalog.shapePartOffsets[shapeId + 1] ?? start;
@@ -198,6 +199,8 @@ function evaluateRealization(
   }
   const sums = new Float64Array(partCount * 4);
   const directionWeights = new Float64Array(partCount * EVIDENCE_DIRECTIONS.length);
+  const lockedWeights = Array.from({ length: partCount }, () => new Map<number, number>());
+  const overallLockedWeights = new Map<number, number>();
   const sampleStart = samples.cellOffsets[cell] ?? 0;
   const sampleEnd = samples.cellOffsets[cell + 1] ?? sampleStart;
   const overall = new Float64Array(4);
@@ -223,6 +226,13 @@ function evaluateRealization(
     );
     const directionSlot = localPart * 6 + direction;
     directionWeights[directionSlot] = (directionWeights[directionSlot] ?? 0) + weight;
+    const sourceMaterial = samples.sourceMaterialIds[sample] ?? INVALID_PALETTE;
+    const lockedPalette = sourceMaterialPaletteIndexes?.[sourceMaterial] ?? INVALID_PALETTE;
+    if (lockedPalette !== INVALID_PALETTE) {
+      const weights = lockedWeights[localPart]!;
+      weights.set(lockedPalette, (weights.get(lockedPalette) ?? 0) + weight);
+      overallLockedWeights.set(lockedPalette, (overallLockedWeights.get(lockedPalette) ?? 0) + weight);
+    }
   }
   const acceptedBlockIds: string[] = [];
   const acceptedStates: string[] = [];
@@ -249,7 +259,13 @@ function evaluateRealization(
     let bestChoice: MaterialChoice | undefined;
     const profile = runtime?.getPartMaterialProfile(shapeId, localPart);
     const directionOrder = preferredDirections(directionWeights, localPart);
-    for (let paletteIndex = 0; paletteIndex < palette.size; paletteIndex += 1) {
+    const partLockedWeights = lockedWeights[localPart]!;
+    const locked = [...(partLockedWeights.size > 0 ? partLockedWeights : overallLockedWeights).entries()]
+      .sort((left, right) => right[1] - left[1] || left[0] - right[0])[0]?.[0];
+    const paletteCandidates: Iterable<number> = locked === undefined
+      ? { *[Symbol.iterator]() { for (let index = 0; index < palette.size; index += 1) yield index; } }
+      : [locked];
+    for (const paletteIndex of paletteCandidates) {
       const choice = materialChoice(
         palette,
         paletteIndex,
@@ -315,9 +331,16 @@ function preferred(
 }
 
 export function resolveMaterials(options: ResolveMaterialOptions): PackedResolvedMaterials {
-  const { catalog, geometryIds, palette, runtime, samples } = options;
+  const { catalog, geometryIds, palette, runtime, samples, sourceMaterialPaletteIndexes } = options;
   if (samples.cellOffsets.length !== geometryIds.length + 1) {
     throw new Error('Surface sample cell count does not match geometry grid');
+  }
+  if (sourceMaterialPaletteIndexes !== undefined) {
+    for (const index of sourceMaterialPaletteIndexes) {
+      if (index !== INVALID_PALETTE && index >= palette.size) {
+        throw new RangeError(`Locked source material palette index ${index} is out of range`);
+      }
+    }
   }
   const shapeIds = new Uint32Array(geometryIds.length);
   const invalidCells = new Uint8Array(geometryIds.length);
@@ -337,7 +360,16 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
     for (const shapeId of catalog.getRealizationShapeIds(geometryIds[cell] ?? 0)) {
       best = preferred(
         best,
-        evaluateRealization(catalog, runtime, palette, samples, cell, shapeId, ownerCache),
+        evaluateRealization(
+          catalog,
+          runtime,
+          palette,
+          samples,
+          cell,
+          shapeId,
+          ownerCache,
+          sourceMaterialPaletteIndexes,
+        ),
         catalog,
       );
     }

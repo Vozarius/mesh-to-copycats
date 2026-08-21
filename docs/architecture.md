@@ -40,11 +40,15 @@ geometry result + every exact-equivalent shape realization
   profiles, assigns samples through nearest part ownership and selects only
   material-compatible exact geometry realizations.
 - `tools/palette-generator` resolves blockstates, inherited models and PNG
-  textures from ordered resource JARs into a source-fingerprinted browser palette.
+  textures from ordered resource JARs into a source-fingerprinted browser palette,
+  including a compact 16×16 first-frame RGBA preview per material.
 - `minecraft-nbt` writes deterministic gzip StructureTemplate files with audited
   single-state and multipart Copycats material storage.
 - `apps/web` owns the React/Three editor shell and runs the pipeline in a
   dedicated module Worker against the production browser catalog.
+- `neighbors` compiles changed controlled `updateShape` probes into a sparse
+  checksummed artifact and applies bounded deterministic coordinate descent over
+  the optimized sparse grid before material realization selection.
 
 Dependencies point toward data packages only; the catalog has no dependency on
 the optimizer.
@@ -203,32 +207,37 @@ inflating every normal result.
 
 ## Future boundary
 
-The next boundary is generated texture-derived Minecraft material profiles,
-texture image sampling, neighbour constraint solving and NBT serialization.
-Worker/chunk orchestration, per-part surface sampling, OKLab matching, exact
-post-material realization selection and the first React/Three editor are now
-implemented. Profiling can still justify a scratch-backed `optimizeCellInto`
-path or a Rust/WASM kernel.
+The end-to-end MVP boundary is verified. A pinned NeoForge server loads the
+gzip NBT through Minecraft's `StructureTemplate` and a real Create
+Schematicannon lifecycle. The cannon computes and consumes its own material
+checklist, launches and places the blocks, and the verifier compares exact block
+states and every explicitly exported Copycats material subtree before cleanup.
+Global transforms, source-material locks, undo/redo, generated texture profiles,
+UV sampling, neighbour constraint solving, exact GRID16 preview and NBT
+serialization are implemented. Per-region brush overrides and an interactive
+transform gizmo remain post-MVP editor polish. Profiling can still justify a
+scratch-backed `optimizeCellInto` path or a Rust/WASM kernel.
 
 ## Current constraints
 
-- The fixture is still the default catalog. The pinned extractor has completed
-  a local end-to-end production run (60,475 shapes, 2,120 geometries, 63
-  material profiles) and its binaries pass decode/CRC verification, but no
-  reviewed production artifact is committed yet.
+- The web Worker prefers the generated production catalog and falls back to the
+  fixture only when production loading fails. The pinned run contains 60,479
+  shapes, 2,120 geometries and 67 source material profiles.
 - Full raw extraction evidence remains an offline audit artifact. The measured
-  compact interchange is about 478 MiB and generated audit 438.91 MiB. Browser
-  loading uses only 4.64 MiB runtime metadata plus the two packed binaries and
+  compact interchange is 478.77 MiB and generated audit 439.60 MiB. Browser
+  loading uses only 5.31 MiB runtime metadata plus the two packed binaries and
   verifies the runtime file against the CRC stored in core metadata.
 - The extraction command verifies the exact loaded Minecraft, NeoForge, Create,
   Copycats+ and extractor versions before calling upstream APIs. A missing or
   mismatched pin aborts extraction rather than producing mixed-version data.
-- The Java exporter certifies Copycats multipart masks only when isolated
-  singleton-state witnesses are contained by the target and their union exactly
-  reconstructs the total GRID16 mask. Ambiguous or non-grid states are omitted
-  with deterministic diagnostics. Copycats cogwheel `shaft` and `cogwheel`
-  parts currently have no singleton witnesses and are therefore omitted with
-  `COPYCATS_MULTIPART_UNSUPPORTED`.
+- The Java exporter normally certifies Copycats multipart masks only when
+  isolated singleton-state witnesses are contained by the target and their
+  union exactly reconstructs the total GRID16 mask. For the pinned cogwheel
+  family, the upstream interaction contract supplies an exact second proof:
+  `cogwheel` owns the central axial GRID16 slice 6..10 and `shaft` owns the two
+  remaining slices. Both small and large cogwheel realizations are included
+  only after their clipped masks exactly reconstruct the authoritative outline.
+  Other ambiguous or non-grid states remain fail-closed diagnostics.
 - Material acceptance covers the complete loaded registry universe of
   `BlockItem` identities in six directions and preserves the accepted result
   state. Its profiles are sparse and content-addressed. A version-pinned audited
@@ -254,6 +263,21 @@ path or a Rust/WASM kernel.
   owner grid deterministically assigns the lowest local part id. The separate
   part masks retain the overlap, but one owner byte cannot represent coincident
   ownership and a material-stage policy is still required.
+- The Web editor accepts OBJ, GLB and browser-decodable images (as textured
+  planes), creates plane/circle/sphere primitives and allows global palette
+  exclusions before a repeated solve. Source mesh material slots can be locked
+  to generated palette item IDs; the packed solver propagates dominant locks to
+  exact-equivalent multipart realizations without bypassing acceptance or
+  placement validation. Editor settings use a dirty gate so stale results cannot
+  be exported. Scale, XYZ rotation and translation are baked into the same packed
+  mesh consumed by preview and optimization; Center + Ground derives a stable
+  translation from transformed bounds. The source preview renders indexed
+  per-material groups rather than collapsing a GLB to its first material. Image
+  alpha is thresholded before voxelization and greedily merged into textured
+  rectangles, so transparent background creates neither triangles nor cells.
+  Optimized boxes are grouped by resolved palette index and use the generated
+  nearest-filtered texture previews; exact CT/biome tint/Copycat UV cropping is
+  intentionally left to Minecraft rather than asserted by the debug renderer.
 - The sparse rasterizer conservatively marks the triangle surface. It does not
   perform closed-volume parity filling; by design, cells and microvoxels not
   crossed by model surface remain air.

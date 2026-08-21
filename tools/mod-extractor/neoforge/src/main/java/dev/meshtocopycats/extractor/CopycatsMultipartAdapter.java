@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
@@ -27,6 +28,12 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  */
 final class CopycatsMultipartAdapter {
     private static final int MAX_MATERIAL_SLOTS = 256;
+    private static final String COGWHEEL_BLOCK_CLASS =
+        "com.copycatsplus.copycats.content.copycat.cogwheel.CopycatCogWheelBlock";
+    private static final String COGWHEEL_KEY = "cogwheel";
+    private static final String SHAFT_KEY = "shaft";
+    private static final int COGWHEEL_MIN = 6;
+    private static final int COGWHEEL_MAX = 10;
 
     private CopycatsMultipartAdapter() {}
 
@@ -42,6 +49,7 @@ final class CopycatsMultipartAdapter {
         try {
             return Result.supported(extractMultipart(
                 blockId,
+                block,
                 copycat,
                 targetState,
                 possibleStates,
@@ -55,6 +63,7 @@ final class CopycatsMultipartAdapter {
 
     private static List<ExtractedPartGeometry> extractMultipart(
         String blockId,
+        Block block,
         IMultiStateCopycatBlock copycat,
         BlockState targetState,
         List<BlockState> possibleStates,
@@ -71,6 +80,18 @@ final class CopycatsMultipartAdapter {
                 throw failure(blockId, targetState, "has geometry but no active Copycats storage key");
             }
             return List.of();
+        }
+
+        if (block.getClass().getName().equals(COGWHEEL_BLOCK_CLASS)) {
+            return extractPinnedCogwheel(
+                blockId,
+                targetState,
+                storageKeys,
+                activeKeys,
+                materialSlots,
+                targetBoxes,
+                targetMask
+            );
         }
 
         List<ExtractedPartGeometry> parts = new ArrayList<>(activeKeys.size());
@@ -101,6 +122,90 @@ final class CopycatsMultipartAdapter {
             );
         }
         return List.copyOf(parts);
+    }
+
+    /**
+     * Exact, version-pinned Copycats+ 3.0.4 cogwheel ownership.
+     *
+     * <p>{@code CopycatCogWheelBlock.partExists} is unconditionally true and its public
+     * {@code getPropertyFromInteraction} assigns the cogwheel key exactly when the local hit
+     * coordinate along AXIS is strictly between 0.375 and 0.625. Those are the integer GRID16
+     * planes 6 and 10. Clipping the authoritative outline boxes at the same planes therefore
+     * preserves its interaction ownership without attempting to reverse-engineer the fractional
+     * render model.</p>
+     */
+    private static List<ExtractedPartGeometry> extractPinnedCogwheel(
+        String blockId,
+        BlockState targetState,
+        List<String> storageKeys,
+        List<String> activeKeys,
+        Map<String, Integer> materialSlots,
+        List<int[]> targetBoxes,
+        VoxelMask16 targetMask
+    ) {
+        List<String> expectedKeys = List.of(COGWHEEL_KEY, SHAFT_KEY);
+        if (!storageKeys.equals(expectedKeys) || !activeKeys.equals(expectedKeys)) {
+            throw failure(
+                blockId,
+                targetState,
+                "pinned cogwheel storage contract changed: expected active keys " + expectedKeys
+            );
+        }
+
+        Direction.Axis axis = targetState.getValue(
+            com.simibubi.create.content.kinetics.base.RotatedPillarKineticBlock.AXIS
+        );
+        List<int[]> cogwheelBoxes = clipBoxes(targetBoxes, axis, COGWHEEL_MIN, COGWHEEL_MAX);
+        List<int[]> shaftBoxes = new ArrayList<>();
+        shaftBoxes.addAll(clipBoxes(targetBoxes, axis, 0, COGWHEEL_MIN));
+        shaftBoxes.addAll(clipBoxes(targetBoxes, axis, COGWHEEL_MAX, 16));
+        shaftBoxes.sort(CopycatsMultipartAdapter::compareBoxes);
+
+        VoxelMask16 cogwheelMask = VoxelMask16.fromBoxes(cogwheelBoxes);
+        VoxelMask16 shaftMask = VoxelMask16.fromBoxes(shaftBoxes);
+        if (
+            cogwheelMask.isEmpty() ||
+            shaftMask.isEmpty() ||
+            !cogwheelMask.union(shaftMask).equals(targetMask)
+        ) {
+            throw failure(
+                blockId,
+                targetState,
+                "pinned cogwheel GRID16 ownership does not reconstruct the outline shape"
+            );
+        }
+
+        return List.of(
+            new ExtractedPartGeometry(cogwheelBoxes, COGWHEEL_KEY, materialSlots.get(COGWHEEL_KEY)),
+            new ExtractedPartGeometry(shaftBoxes, SHAFT_KEY, materialSlots.get(SHAFT_KEY))
+        );
+    }
+
+    private static List<int[]> clipBoxes(
+        List<int[]> boxes,
+        Direction.Axis axis,
+        int minimum,
+        int maximum
+    ) {
+        int minimumIndex = axis.ordinal();
+        int maximumIndex = minimumIndex + 3;
+        List<int[]> clipped = new ArrayList<>();
+        for (int[] source : boxes) {
+            int[] box = source.clone();
+            box[minimumIndex] = Math.max(box[minimumIndex], minimum);
+            box[maximumIndex] = Math.min(box[maximumIndex], maximum);
+            if (box[minimumIndex] < box[maximumIndex]) clipped.add(box);
+        }
+        clipped.sort(CopycatsMultipartAdapter::compareBoxes);
+        return List.copyOf(clipped);
+    }
+
+    private static int compareBoxes(int[] left, int[] right) {
+        for (int coordinate = 0; coordinate < 6; coordinate++) {
+            int comparison = Integer.compare(left[coordinate], right[coordinate]);
+            if (comparison != 0) return comparison;
+        }
+        return 0;
     }
 
     private static Candidate isolate(

@@ -7,11 +7,28 @@ import type { PackedTriangleMesh } from '@mesh-to-copycats/mesh';
 export interface EditorSceneProps {
   readonly mesh: PackedTriangleMesh;
   readonly optimizedColors?: Float32Array;
+  readonly optimizedPaletteIndexes?: Uint32Array;
   readonly optimizedPositions?: Float32Array;
+  readonly optimizedScales?: Float32Array;
+  readonly paletteTextureHeights?: Uint16Array;
+  readonly paletteTextureOffsets?: Uint32Array;
+  readonly paletteTextureRgbaSrgb?: Uint8Array;
+  readonly paletteTextureWidths?: Uint16Array;
   readonly view: 'optimized' | 'original' | 'split';
 }
 
-export function EditorScene({ mesh, optimizedColors, optimizedPositions, view }: EditorSceneProps) {
+export function EditorScene({
+  mesh,
+  optimizedColors,
+  optimizedPaletteIndexes,
+  optimizedPositions,
+  optimizedScales,
+  paletteTextureHeights,
+  paletteTextureOffsets,
+  paletteTextureRgbaSrgb,
+  paletteTextureWidths,
+  view,
+}: EditorSceneProps) {
   const container = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -46,53 +63,146 @@ export function EditorScene({ mesh, optimizedColors, optimizedPositions, view }:
 
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
-    geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+    if (mesh.texcoords !== undefined) geometry.setAttribute('uv', new THREE.BufferAttribute(mesh.texcoords, 2));
+    const groupedIndices: number[] = [];
+    for (let material = 0; material < mesh.materialNames.length; material += 1) {
+      const start = groupedIndices.length;
+      for (let triangle = 0; triangle < mesh.triangleMaterials.length; triangle += 1) {
+        if ((mesh.triangleMaterials[triangle] ?? 0) !== material) continue;
+        groupedIndices.push(
+          mesh.indices[triangle * 3] ?? 0,
+          mesh.indices[triangle * 3 + 1] ?? 0,
+          mesh.indices[triangle * 3 + 2] ?? 0,
+        );
+      }
+      if (groupedIndices.length > start) geometry.addGroup(start, groupedIndices.length - start, material);
+    }
+    geometry.setIndex(new THREE.BufferAttribute(Uint32Array.from(groupedIndices), 1));
     geometry.computeVertexNormals();
-    const original = new THREE.Mesh(
-      geometry,
-      new THREE.MeshStandardMaterial({
-        color: '#c9d2c1',
+    const atlas = mesh.textureAtlas;
+    const wrapMode = (mode: number) => mode === 10497
+      ? THREE.RepeatWrapping
+      : mode === 33648 ? THREE.MirroredRepeatWrapping : THREE.ClampToEdgeWrapping;
+    const originalTextures: THREE.DataTexture[] = atlas === undefined
+      ? []
+      : Array.from({ length: atlas.widths.length }, (_value, textureIndex) => {
+          const offset = atlas.offsets[textureIndex] ?? 0;
+          const end = atlas.offsets[textureIndex + 1] ?? offset;
+          const texture = new THREE.DataTexture(
+            atlas.rgbaSrgb.slice(offset, end),
+            atlas.widths[textureIndex] ?? 1,
+            atlas.heights[textureIndex] ?? 1,
+            THREE.RGBAFormat,
+          );
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.flipY = false;
+          texture.wrapS = wrapMode(atlas.wrapS[textureIndex] ?? 33071);
+          texture.wrapT = wrapMode(atlas.wrapT[textureIndex] ?? 33071);
+          texture.needsUpdate = true;
+          return texture;
+        });
+    const originalMaterials = mesh.materialNames.map((_name, materialIndex) => {
+      const color = new THREE.Color('#c9d2c1');
+      const colorOffset = materialIndex * 4;
+      if (mesh.materialBaseColorsLinear !== undefined) {
+        color.setRGB(
+          mesh.materialBaseColorsLinear[colorOffset] ?? 1,
+          mesh.materialBaseColorsLinear[colorOffset + 1] ?? 1,
+          mesh.materialBaseColorsLinear[colorOffset + 2] ?? 1,
+          THREE.LinearSRGBColorSpace,
+        );
+      }
+      const alpha = mesh.materialBaseColorsLinear?.[colorOffset + 3] ?? 1;
+      const textureIndex = mesh.materialTextureIndexes?.[materialIndex] ?? -1;
+      return new THREE.MeshStandardMaterial({
+        color,
+        map: textureIndex >= 0 ? originalTextures[textureIndex] : undefined,
         metalness: 0.05,
-        opacity: view === 'split' ? 0.24 : 0.88,
+        opacity: alpha * (view === 'split' ? 0.24 : 0.88),
         roughness: 0.72,
         side: THREE.DoubleSide,
-        transparent: view === 'split',
+        transparent: view === 'split' || alpha < 1,
         wireframe: view === 'split',
-      }),
+      });
+    });
+    const original = new THREE.Mesh(
+      geometry,
+      originalMaterials,
     );
     original.visible = view !== 'optimized';
     scene.add(original);
 
-    let optimized: THREE.InstancedMesh | undefined;
+    const optimizedMeshes: THREE.InstancedMesh[] = [];
+    const optimizedTextures: THREE.DataTexture[] = [];
     if (optimizedPositions !== undefined && optimizedPositions.length > 0) {
-      const cube = new THREE.BoxGeometry(0.235, 0.235, 0.235);
-      const material = new THREE.MeshStandardMaterial({
-        color: '#d5a843',
-        metalness: 0.02,
-        roughness: 0.58,
-        vertexColors: true,
-      });
-      optimized = new THREE.InstancedMesh(cube, material, optimizedPositions.length / 3);
-      const matrix = new THREE.Matrix4();
-      for (let instance = 0; instance < optimized.count; instance += 1) {
-        matrix.makeTranslation(
-          optimizedPositions[instance * 3] ?? 0,
-          optimizedPositions[instance * 3 + 1] ?? 0,
-          optimizedPositions[instance * 3 + 2] ?? 0,
-        );
-        optimized.setMatrixAt(instance, matrix);
-        if (optimizedColors !== undefined) {
-          optimized.setColorAt(instance, new THREE.Color(
-            optimizedColors[instance * 3] ?? 0.5,
-            optimizedColors[instance * 3 + 1] ?? 0.5,
-            optimizedColors[instance * 3 + 2] ?? 0.5,
-          ));
-        }
+      const groups = new Map<number, number[]>();
+      for (let instance = 0; instance < optimizedPositions.length / 3; instance += 1) {
+        const paletteIndex = optimizedPaletteIndexes?.[instance] ?? 0xffff_ffff;
+        const group = groups.get(paletteIndex) ?? [];
+        group.push(instance);
+        groups.set(paletteIndex, group);
       }
-      optimized.instanceMatrix.needsUpdate = true;
-      if (optimized.instanceColor !== null) optimized.instanceColor.needsUpdate = true;
-      optimized.visible = view !== 'original';
-      scene.add(optimized);
+      for (const [paletteIndex, instances] of groups) {
+        const textureOffset = paletteTextureOffsets?.[paletteIndex];
+        const textureEnd = paletteTextureOffsets?.[paletteIndex + 1];
+        const textureWidth = paletteTextureWidths?.[paletteIndex] ?? 0;
+        const textureHeight = paletteTextureHeights?.[paletteIndex] ?? 0;
+        let texture: THREE.DataTexture | undefined;
+        if (
+          paletteTextureRgbaSrgb !== undefined && textureOffset !== undefined &&
+          textureEnd !== undefined && textureEnd - textureOffset === textureWidth * textureHeight * 4
+        ) {
+          texture = new THREE.DataTexture(
+            paletteTextureRgbaSrgb.slice(textureOffset, textureEnd),
+            textureWidth,
+            textureHeight,
+            THREE.RGBAFormat,
+          );
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.magFilter = THREE.NearestFilter;
+          texture.minFilter = THREE.NearestFilter;
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.RepeatWrapping;
+          texture.needsUpdate = true;
+          optimizedTextures.push(texture);
+        }
+        const cube = new THREE.BoxGeometry(1, 1, 1);
+        const material = new THREE.MeshStandardMaterial({
+          color: texture === undefined ? '#d5a843' : '#ffffff',
+          map: texture,
+          metalness: 0.02,
+          roughness: 0.58,
+          vertexColors: texture === undefined,
+        });
+        const optimized = new THREE.InstancedMesh(cube, material, instances.length);
+        const matrix = new THREE.Matrix4();
+        for (let localInstance = 0; localInstance < instances.length; localInstance += 1) {
+          const instance = instances[localInstance] ?? 0;
+          matrix.makeScale(
+            optimizedScales?.[instance * 3] ?? 0.25,
+            optimizedScales?.[instance * 3 + 1] ?? 0.25,
+            optimizedScales?.[instance * 3 + 2] ?? 0.25,
+          );
+          matrix.setPosition(
+            optimizedPositions[instance * 3] ?? 0,
+            optimizedPositions[instance * 3 + 1] ?? 0,
+            optimizedPositions[instance * 3 + 2] ?? 0,
+          );
+          optimized.setMatrixAt(localInstance, matrix);
+          if (texture === undefined && optimizedColors !== undefined) {
+            optimized.setColorAt(localInstance, new THREE.Color(
+              optimizedColors[instance * 3] ?? 0.5,
+              optimizedColors[instance * 3 + 1] ?? 0.5,
+              optimizedColors[instance * 3 + 2] ?? 0.5,
+            ));
+          }
+        }
+        optimized.instanceMatrix.needsUpdate = true;
+        if (optimized.instanceColor !== null) optimized.instanceColor.needsUpdate = true;
+        optimized.visible = view !== 'original';
+        optimizedMeshes.push(optimized);
+        scene.add(optimized);
+      }
     }
 
     const extent = Math.max(
@@ -124,13 +234,28 @@ export function EditorScene({ mesh, optimizedColors, optimizedPositions, view }:
       resize.disconnect();
       controls.dispose();
       geometry.dispose();
-      (original.material as THREE.Material).dispose();
-      optimized?.geometry.dispose();
-      (optimized?.material as THREE.Material | undefined)?.dispose();
+      for (const texture of originalTextures) texture.dispose();
+      for (const material of originalMaterials) material.dispose();
+      for (const texture of optimizedTextures) texture.dispose();
+      for (const optimized of optimizedMeshes) {
+        optimized.geometry.dispose();
+        (optimized.material as THREE.Material).dispose();
+      }
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [mesh, optimizedColors, optimizedPositions, view]);
+  }, [
+    mesh,
+    optimizedColors,
+    optimizedPaletteIndexes,
+    optimizedPositions,
+    optimizedScales,
+    paletteTextureHeights,
+    paletteTextureOffsets,
+    paletteTextureRgbaSrgb,
+    paletteTextureWidths,
+    view,
+  ]);
 
   return <div className="scene" ref={container} aria-label="Interactive 3D model preview" />;
 }

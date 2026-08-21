@@ -3,7 +3,10 @@
 import { optimizeMeshProgressive } from '@mesh-to-copycats/pipeline';
 import {
   getFixtureCatalog,
+  decodeNeighborTransitions,
   loadWebRuntimeCatalog,
+  resolveSparseNeighbors,
+  type PackedNeighborTransitions,
   type PackedShapeCatalog,
   type WebRuntimeCatalog,
 } from '@mesh-to-copycats/shapes';
@@ -12,6 +15,7 @@ import { QualityMode } from '@mesh-to-copycats/shared';
 import {
   createStarterMinecraftPalette,
   extractSurfaceSamples,
+  filterMaterialPalette,
   loadGeneratedMaterialPalette,
   resolveMaterials,
   type PackedMaterialPalette,
@@ -30,6 +34,7 @@ let catalogPromise: Promise<{
   catalog: PackedShapeCatalog;
   runtime?: WebRuntimeCatalog;
   palette: PackedMaterialPalette;
+  neighbors?: PackedNeighborTransitions;
   source: 'fixture' | 'production';
 }> | undefined;
 
@@ -43,6 +48,7 @@ async function loadCatalog(): Promise<{
   catalog: PackedShapeCatalog;
   runtime?: WebRuntimeCatalog;
   palette: PackedMaterialPalette;
+  neighbors?: PackedNeighborTransitions;
   source: 'fixture' | 'production';
 }> {
   catalogPromise ??= Promise.all([
@@ -51,8 +57,18 @@ async function loadCatalog(): Promise<{
       if (!response.ok) throw new Error(`Material palette request failed with HTTP ${response.status}`);
       return loadGeneratedMaterialPalette(await response.text());
     }),
+    fetch('/catalog/neighbor-transitions.bin').then(async (response) => {
+      if (!response.ok) throw new Error(`Neighbor transitions request failed with HTTP ${response.status}`);
+      return decodeNeighborTransitions(new Uint8Array(await response.arrayBuffer()));
+    }),
   ])
-    .then(([runtime, palette]) => ({ catalog: runtime.catalog, palette, runtime, source: 'production' as const }))
+    .then(([runtime, palette, neighbors]) => ({
+      catalog: runtime.catalog,
+      neighbors,
+      palette,
+      runtime,
+      source: 'production' as const,
+    }))
     .catch(() => ({
       catalog: getFixtureCatalog(),
       palette: createStarterMinecraftPalette(),
@@ -68,52 +84,89 @@ function previewData(
   cellX: Int32Array,
   cellY: Int32Array,
   cellZ: Int32Array,
-): { colors: Float32Array; positions: Float32Array; truncated: boolean } {
+): {
+  colors: Float32Array;
+  paletteIndexes: Uint32Array;
+  positions: Float32Array;
+  scales: Float32Array;
+  truncated: boolean;
+} {
   const maximumInstances = 250_000;
   const positions = new Float32Array(maximumInstances * 3);
   const colors = new Float32Array(maximumInstances * 3);
+  const scales = new Float32Array(maximumInstances * 3);
+  const paletteIndexes = new Uint32Array(maximumInstances);
+  paletteIndexes.fill(0xffff_ffff);
   let instances = 0;
   for (let cell = 0; cell < materials.shapeIds.length && instances < maximumInstances; cell += 1) {
     const shapeId = materials.shapeIds[cell] ?? 0;
-    const mask = catalog.getGeometryMask(catalog.shapeGeometry[shapeId] ?? 0, 4);
-    const owner = catalog.getOwnerGrid16(shapeId);
     const globalPartStart = catalog.shapePartOffsets[shapeId] ?? 0;
+    const globalPartEnd = catalog.shapePartOffsets[shapeId + 1] ?? globalPartStart;
     const assignmentStart = materials.cellPartOffsets[cell] ?? 0;
-    const assignmentEnd = materials.cellPartOffsets[cell + 1] ?? assignmentStart;
-    for (let bit = 0; bit < 64 && instances < maximumInstances; bit += 1) {
-      if (((mask[bit >>> 5] ?? 0) & (1 << (bit & 31))) === 0) continue;
-      const x = bit & 3;
-      const y = (bit >>> 2) & 3;
-      const z = bit >>> 4;
-      positions[instances * 3] = (cellX[cell] ?? 0) + (x + 0.5) / 4;
-      positions[instances * 3 + 1] = (cellY[cell] ?? 0) + (y + 0.5) / 4;
-      positions[instances * 3 + 2] = (cellZ[cell] ?? 0) + (z + 0.5) / 4;
-      const ownerId = owner === undefined
-        ? catalog.partIds[globalPartStart] ?? 0
-        : owner[(x * 4 + 2) + 16 * ((y * 4 + 2) + 16 * (z * 4 + 2))] ?? 0;
-      let assignment = assignmentStart;
-      for (let candidate = assignmentStart; candidate < assignmentEnd; candidate += 1) {
-        if ((materials.partIds[candidate] ?? 0) === ownerId) {
-          assignment = candidate;
-          break;
+    for (let globalPart = globalPartStart; globalPart < globalPartEnd && instances < maximumInstances; globalPart += 1) {
+      const assignment = assignmentStart + globalPart - globalPartStart;
+      const maskOffset = catalog.partMask16Offsets[globalPart] ?? globalPart * 128;
+      const mask = catalog.partMasks16.subarray(maskOffset, maskOffset + 128);
+      const visited = new Uint8Array(4096);
+      const occupied = (x: number, y: number, z: number) => {
+        const bit = x + 16 * (y + 16 * z);
+        return visited[bit] === 0 && ((mask[bit >>> 5] ?? 0) & (1 << (bit & 31))) !== 0;
+      };
+      for (let z = 0; z < 16 && instances < maximumInstances; z += 1) {
+        for (let y = 0; y < 16 && instances < maximumInstances; y += 1) {
+          for (let x = 0; x < 16 && instances < maximumInstances; x += 1) {
+            if (!occupied(x, y, z)) continue;
+            let xEnd = x + 1;
+            while (xEnd < 16 && occupied(xEnd, y, z)) xEnd += 1;
+            let yEnd = y + 1;
+            while (yEnd < 16) {
+              let clear = true;
+              for (let scanX = x; scanX < xEnd; scanX += 1) clear &&= occupied(scanX, yEnd, z);
+              if (!clear) break;
+              yEnd += 1;
+            }
+            let zEnd = z + 1;
+            while (zEnd < 16) {
+              let clear = true;
+              for (let scanY = y; scanY < yEnd; scanY += 1) {
+                for (let scanX = x; scanX < xEnd; scanX += 1) clear &&= occupied(scanX, scanY, zEnd);
+              }
+              if (!clear) break;
+              zEnd += 1;
+            }
+            for (let markZ = z; markZ < zEnd; markZ += 1) {
+              for (let markY = y; markY < yEnd; markY += 1) {
+                visited.fill(1, x + 16 * (markY + 16 * markZ), xEnd + 16 * (markY + 16 * markZ));
+              }
+            }
+            positions[instances * 3] = (cellX[cell] ?? 0) + (x + xEnd) / 32;
+            positions[instances * 3 + 1] = (cellY[cell] ?? 0) + (y + yEnd) / 32;
+            positions[instances * 3 + 2] = (cellZ[cell] ?? 0) + (z + zEnd) / 32;
+            scales[instances * 3] = (xEnd - x) / 16;
+            scales[instances * 3 + 1] = (yEnd - y) / 16;
+            scales[instances * 3 + 2] = (zEnd - z) / 16;
+            const paletteIndex = materials.paletteIndexes[assignment] ?? 0xffff_ffff;
+            paletteIndexes[instances] = paletteIndex;
+            colors[instances * 3] = paletteIndex < palette.size
+              ? palette.linearRgb[paletteIndex * 3] ?? 0.5
+              : 0.85;
+            colors[instances * 3 + 1] = paletteIndex < palette.size
+              ? palette.linearRgb[paletteIndex * 3 + 1] ?? 0.5
+              : 0.15;
+            colors[instances * 3 + 2] = paletteIndex < palette.size
+              ? palette.linearRgb[paletteIndex * 3 + 2] ?? 0.5
+              : 0.1;
+            instances += 1;
+          }
         }
       }
-      const paletteIndex = materials.paletteIndexes[assignment] ?? 0xffff_ffff;
-      colors[instances * 3] = paletteIndex < palette.size
-        ? palette.linearRgb[paletteIndex * 3] ?? 0.5
-        : 0.85;
-      colors[instances * 3 + 1] = paletteIndex < palette.size
-        ? palette.linearRgb[paletteIndex * 3 + 1] ?? 0.5
-        : 0.15;
-      colors[instances * 3 + 2] = paletteIndex < palette.size
-        ? palette.linearRgb[paletteIndex * 3 + 2] ?? 0.5
-        : 0.1;
-      instances++;
     }
   }
   return {
     colors: colors.slice(0, instances * 3),
+    paletteIndexes: paletteIndexes.slice(0, instances),
     positions: positions.slice(0, instances * 3),
+    scales: scales.slice(0, instances * 3),
     truncated: instances === maximumInstances,
   };
 }
@@ -146,15 +199,45 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         rasterizer: { scale: request.scale },
         signal: abort,
       });
+      const excluded = new Set(request.excludedMaterialItemIds);
+      const forcedItemIds = new Set(request.materialOverrides.filter((itemId) => itemId.length > 0));
+      const palette = excluded.size === 0
+        ? loaded.palette
+        : filterMaterialPalette(loaded.palette, (itemId) => !excluded.has(itemId) || forcedItemIds.has(itemId));
+      const paletteIndexByItem = new Map(palette.itemIds.map((itemId, index) => [itemId, index]));
+      const sourceMaterialPaletteIndexes = new Uint32Array(request.materialOverrides.length);
+      sourceMaterialPaletteIndexes.fill(0xffff_ffff);
+      for (let sourceMaterial = 0; sourceMaterial < request.materialOverrides.length; sourceMaterial += 1) {
+        const itemId = request.materialOverrides[sourceMaterial] ?? '';
+        if (itemId.length === 0) continue;
+        const paletteIndex = paletteIndexByItem.get(itemId);
+        if (paletteIndex === undefined) throw new Error(`Unknown material override ${itemId}`);
+        sourceMaterialPaletteIndexes[sourceMaterial] = paletteIndex;
+      }
+      const neighborStarted = performance.now();
+      const neighbors = loaded.neighbors === undefined
+        ? {
+            changedCells: 0,
+            geometryIds: result.geometryIds,
+            iterations: 0,
+            shapeIds: result.shapeIds,
+          }
+        : resolveSparseNeighbors({
+            catalog: loaded.catalog,
+            shapeIds: result.shapeIds,
+            surface: result.surface,
+            transitions: loaded.neighbors,
+          });
+      const neighborMs = performance.now() - neighborStarted;
       const materialStarted = performance.now();
-      const palette = loaded.palette;
       const samples = extractSurfaceSamples(request.mesh, result.surface);
       const materials = resolveMaterials({
         catalog: loaded.catalog,
-        geometryIds: result.geometryIds,
+        geometryIds: neighbors.geometryIds,
         palette,
         ...(loaded.runtime === undefined ? {} : { runtime: loaded.runtime }),
         samples,
+        sourceMaterialPaletteIndexes,
       });
       const materialMs = performance.now() - materialStarted;
       const preview = previewData(
@@ -189,15 +272,23 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         cellZ: result.surface.cellZ,
         errors: result.geometryErrors,
         invalidMaterialCells: materials.invalidCells.reduce((sum, value) => sum + value, 0),
+        neighborChangedCells: neighbors.changedCells,
+        neighborIterations: neighbors.iterations,
         materialErrors: materials.materialErrors,
         materialDirections: materials.materialDirections,
         paletteIndexes: materials.paletteIndexes,
         paletteItemIds: palette.itemIds,
         paletteSrgb: palette.srgb,
+        paletteTextureHeights: palette.previewTextureAtlas?.heights.slice() ?? new Uint16Array(),
+        paletteTextureOffsets: palette.previewTextureAtlas?.offsets.slice() ?? new Uint32Array(),
+        paletteTextureRgbaSrgb: palette.previewTextureAtlas?.rgbaSrgb.slice() ?? new Uint8Array(),
+        paletteTextureWidths: palette.previewTextureAtlas?.widths.slice() ?? new Uint16Array(),
         partIds: materials.partIds,
         partKeys,
         previewColors: preview.colors,
         previewPositions: preview.positions,
+        previewPaletteIndexes: preview.paletteIndexes,
+        previewScales: preview.scales,
         previewTruncated: preview.truncated,
         requestId: request.requestId,
         shapeIds: materials.shapeIds,
@@ -206,7 +297,8 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         timingsMs: {
           ...result.timingsMs,
           materials: materialMs,
-          total: result.timingsMs.total + materialMs,
+          neighbors: neighborMs,
+          total: result.timingsMs.total + materialMs + neighborMs,
         },
         triangleCount: request.mesh.indices.length / 3,
         type: 'complete',
@@ -221,9 +313,15 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         response.materialDirections.buffer,
         response.paletteIndexes.buffer,
         response.paletteSrgb.buffer,
+        response.paletteTextureHeights.buffer,
+        response.paletteTextureOffsets.buffer,
+        response.paletteTextureRgbaSrgb.buffer,
+        response.paletteTextureWidths.buffer,
         response.partIds.buffer,
         response.previewColors.buffer,
         response.previewPositions.buffer,
+        response.previewPaletteIndexes.buffer,
+        response.previewScales.buffer,
         response.shapeIds.buffer,
       ]);
     } catch (error) {
