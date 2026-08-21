@@ -15,7 +15,6 @@ import { QualityMode } from '@mesh-to-copycats/shared';
 import {
   createStarterMinecraftPalette,
   extractSurfaceSamples,
-  filterMaterialPalette,
   loadGeneratedMaterialPalette,
   resolveMaterials,
   type PackedMaterialPalette,
@@ -23,6 +22,7 @@ import {
 } from '../../../packages/palette/src/index.js';
 import type {
   CompleteResponse,
+  PaletteResponse,
   QualityName,
   WorkerRequest,
   WorkerResponse,
@@ -178,6 +178,34 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
     if (state !== undefined) state.aborted = true;
     return;
   }
+  if (request.type === 'load-palette') {
+    void loadCatalog().then((loaded) => {
+      const response: PaletteResponse = {
+        itemIds: loaded.palette.itemIds,
+        requestId: request.requestId,
+        srgb: loaded.palette.srgb.slice(),
+        textureHeights: loaded.palette.previewTextureAtlas?.heights.slice() ?? new Uint16Array(),
+        textureOffsets: loaded.palette.previewTextureAtlas?.offsets.slice() ?? new Uint32Array(),
+        textureRgbaSrgb: loaded.palette.previewTextureAtlas?.rgbaSrgb.slice() ?? new Uint8Array(),
+        textureWidths: loaded.palette.previewTextureAtlas?.widths.slice() ?? new Uint16Array(),
+        type: 'palette',
+      };
+      scope.postMessage(response, [
+        response.srgb.buffer,
+        response.textureHeights.buffer,
+        response.textureOffsets.buffer,
+        response.textureRgbaSrgb.buffer,
+        response.textureWidths.buffer,
+      ]);
+    }).catch((error: unknown) => {
+      scope.postMessage({
+        message: error instanceof Error ? error.message : String(error),
+        requestId: request.requestId,
+        type: 'error',
+      } satisfies WorkerResponse);
+    });
+    return;
+  }
   const abort = { aborted: false };
   abortStates.set(request.requestId, abort);
   void (async () => {
@@ -204,7 +232,6 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         rasterizer: { scale: request.scale },
         signal: abort,
       });
-      const excluded = new Set(request.excludedMaterialItemIds);
       const uncoveredCells = result.missingCounts.reduce(
         (count, missing) => count + (missing > 0 ? 1 : 0),
         0,
@@ -212,10 +239,16 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
       if (uncoveredCells > 0) {
         throw new Error(`Surface coverage invariant failed for ${uncoveredCells} cells`);
       }
-      const forcedItemIds = new Set(request.materialOverrides.filter((itemId) => itemId.length > 0));
-      const palette = excluded.size === 0
-        ? loaded.palette
-        : filterMaterialPalette(loaded.palette, (itemId) => !excluded.has(itemId) || forcedItemIds.has(itemId));
+      const palette = loaded.palette;
+      const included = request.includedMaterialItemIds === undefined
+        ? undefined
+        : new Set(request.includedMaterialItemIds);
+      if (included?.size === 0) {
+        throw new Error('Select at least one included material before building geometry');
+      }
+      const allowedPaletteIndexes = included === undefined
+        ? undefined
+        : Uint8Array.from(palette.itemIds, (itemId) => included.has(itemId) ? 1 : 0);
       const paletteIndexByItem = new Map(palette.itemIds.map((itemId, index) => [itemId, index]));
       const sourceMaterialPaletteIndexes = new Uint32Array(request.materialOverrides.length);
       sourceMaterialPaletteIndexes.fill(0xffff_ffff);
@@ -244,6 +277,7 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
       const materialStarted = performance.now();
       const samples = extractSurfaceSamples(request.mesh, result.surface, { strataPerAxis: 2 });
       const materials = resolveMaterials({
+        ...(allowedPaletteIndexes === undefined ? {} : { allowedPaletteIndexes }),
         catalog: loaded.catalog,
         geometryIds: neighbors.geometryIds,
         palette,

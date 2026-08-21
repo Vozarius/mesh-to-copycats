@@ -23,6 +23,38 @@ import type {
   WorkerResponse,
 } from './worker-types.js';
 
+interface MaterialLibrary {
+  readonly itemIds: readonly string[];
+  readonly srgb: Float32Array;
+  readonly textureHeights: Uint16Array;
+  readonly textureOffsets: Uint32Array;
+  readonly textureRgbaSrgb: Uint8Array;
+  readonly textureWidths: Uint16Array;
+}
+
+function MaterialTexture({ index, library }: { readonly index: number; readonly library: MaterialLibrary }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const target = canvas.current;
+    if (target === null) return;
+    const width = library.textureWidths[index] ?? 0;
+    const height = library.textureHeights[index] ?? 0;
+    const start = library.textureOffsets[index] ?? 0;
+    const end = library.textureOffsets[index + 1] ?? start;
+    const context = target.getContext('2d');
+    if (context === null || width === 0 || height === 0 || end - start !== width * height * 4) return;
+    target.width = width;
+    target.height = height;
+    const pixels = new Uint8ClampedArray(end - start);
+    pixels.set(library.textureRgbaSrgb.subarray(start, end));
+    context.putImageData(new ImageData(pixels, width, height), 0, 0);
+  }, [index, library]);
+  const red = Math.round((library.srgb[index * 3] ?? 0.5) * 255);
+  const green = Math.round((library.srgb[index * 3 + 1] ?? 0.5) * 255);
+  const blue = Math.round((library.srgb[index * 3 + 2] ?? 0.5) * 255);
+  return <canvas ref={canvas} style={{ backgroundColor: `rgb(${red} ${green} ${blue})` }} />;
+}
+
 function demoMesh(): PackedTriangleMesh {
   return finalizeMesh({
     indices: [
@@ -75,12 +107,15 @@ export function App() {
   const [error, setError] = useState('');
   const [exportNotice, setExportNotice] = useState('');
   const [result, setResult] = useState<CompleteResponse>();
-  const [excludedMaterials, setExcludedMaterials] = useState<ReadonlySet<string>>(() => new Set());
   const [materialOverrides, setMaterialOverrides] = useState<readonly string[]>(['']);
   const [selectedMaterialSlot, setSelectedMaterialSlot] = useState(0);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [modelTransform, setModelTransform] = useState<ModelTransformState>(IDENTITY_TRANSFORM);
   const [imageAlphaThreshold, setImageAlphaThreshold] = useState(16);
+  const [cameraClipEnd, setCameraClipEnd] = useState(1_000_000);
+  const [includedMaterials, setIncludedMaterials] = useState<ReadonlySet<string>>();
+  const [materialFilter, setMaterialFilter] = useState('');
+  const [materialLibrary, setMaterialLibrary] = useState<MaterialLibrary>();
   const overrideUndo = useRef<readonly string[][]>([]);
   const overrideRedo = useRef<readonly string[][]>([]);
   const worker = useRef<Worker | undefined>(undefined);
@@ -96,6 +131,21 @@ export function App() {
     worker.current = instance;
     instance.addEventListener('message', (event: MessageEvent<WorkerResponse>) => {
       const response = event.data;
+      if (response.type === 'palette') {
+        setMaterialLibrary(response);
+        setIncludedMaterials((current) => current ?? new Set(response.itemIds));
+        return;
+      }
+      if (response.type === 'error' && response.requestId === -1) {
+        setError(`Could not load material library: ${response.message}`);
+        setStatus('error');
+        return;
+      }
+      if (response.type === 'error' && response.requestId === -1) {
+        setError(`Could not load material library: ${response.message}`);
+        setStatus('error');
+        return;
+      }
       if (response.requestId !== request.current) return;
       if (response.type === 'progress') {
         setProgress({ completed: response.completed, total: response.total });
@@ -110,6 +160,7 @@ export function App() {
         setStatus('error');
       }
     });
+    instance.postMessage({ requestId: -1, type: 'load-palette' } satisfies WorkerRequest);
     return () => {
       instance.terminate();
     };
@@ -206,6 +257,10 @@ export function App() {
 
   const optimize = () => {
     if (worker.current === undefined) return;
+    if (includedMaterials?.size === 0) {
+      setError('Select at least one included material before building geometry.');
+      return;
+    }
     if (status === 'running') {
       worker.current.postMessage({ requestId: request.current, type: 'cancel' } satisfies WorkerRequest);
     }
@@ -263,7 +318,9 @@ export function App() {
       );
     }
     worker.current.postMessage({
-      excludedMaterialItemIds: [...excludedMaterials].sort(),
+      ...(includedMaterials === undefined
+        ? {}
+        : { includedMaterialItemIds: [...includedMaterials].sort() }),
       materialOverrides,
       mesh: workerMesh,
       quality,
@@ -346,6 +403,12 @@ export function App() {
     ? 0
     : new Set(Array.from(result.paletteIndexes)
         .filter((index) => index < result.paletteItemIds.length)).size;
+  const filteredMaterialIndexes = materialLibrary === undefined
+    ? []
+    : materialLibrary.itemIds
+        .map((_itemId, index) => index)
+        .filter((index) => (materialLibrary.itemIds[index] ?? '').toLowerCase()
+          .includes(materialFilter.trim().toLowerCase()));
 
   return (
     <main className="app-shell">
@@ -408,6 +471,11 @@ export function App() {
             if (!Number.isFinite(next) || next <= 0) return;
             setScale(next);
             setSettingsDirty(true);
+          }} />
+          <label className="field-label" htmlFor="clip-end">Camera clip end</label>
+          <input id="clip-end" className="material-select" type="number" min="10" step="1000" value={cameraClipEnd} onChange={(event) => {
+            const next = event.currentTarget.valueAsNumber;
+            if (Number.isFinite(next) && next >= 10) setCameraClipEnd(next);
           }} />
           <span className="field-label">Rotation XYZ (degrees)</span>
           <div className="transform-grid">
@@ -479,6 +547,56 @@ export function App() {
             <span>{mesh.texcoords === undefined ? 'Mesh has no UV coordinates' : 'Apply image to selected source slot'}</span>
           </label>
           <label className="field-label" htmlFor="minecraft-material">Minecraft material lock</label>
+          <div className="include-materials">
+            <div className="include-heading">
+              <span>Include materials</span>
+              <b>{includedMaterials?.size ?? 0} / {materialLibrary?.itemIds.length ?? 0}</b>
+            </div>
+            <input
+              className="material-select"
+              type="search"
+              placeholder="Search blocks…"
+              value={materialFilter}
+              onChange={(event) => { setMaterialFilter(event.currentTarget.value); }}
+            />
+            <div className="include-actions">
+              <button type="button" disabled={materialLibrary === undefined} onClick={() => {
+                if (materialLibrary === undefined) return;
+                setIncludedMaterials(new Set(materialLibrary.itemIds));
+                setSettingsDirty(true);
+              }}>SELECT ALL</button>
+              <button type="button" disabled={materialLibrary === undefined} onClick={() => {
+                setIncludedMaterials(new Set());
+                setMaterialOverrides((current) => current.map(() => ''));
+                overrideUndo.current = [];
+                overrideRedo.current = [];
+                setSettingsDirty(true);
+              }}>DESELECT ALL</button>
+            </div>
+            <div className="include-grid">
+              {materialLibrary === undefined && <p className="notice">Loading block textures…</p>}
+              {filteredMaterialIndexes.map((paletteIndex) => {
+                const itemId = materialLibrary?.itemIds[paletteIndex] ?? '';
+                const selected = includedMaterials?.has(itemId) === true;
+                return <label className={selected ? 'selected' : ''} key={itemId} title={itemId}>
+                  <input type="checkbox" checked={selected} onChange={(event) => {
+                    const checked = event.currentTarget.checked;
+                    setIncludedMaterials((current) => {
+                      const next = new Set(current);
+                      if (checked) next.add(itemId);
+                      else next.delete(itemId);
+                      return next;
+                    });
+                    if (!checked) setMaterialOverrides((current) =>
+                      current.map((locked) => locked === itemId ? '' : locked));
+                    setSettingsDirty(true);
+                  }} />
+                  <MaterialTexture index={paletteIndex} library={materialLibrary!} />
+                  <span>{itemId.replace(/^[^:]+:/u, '')}</span>
+                </label>;
+              })}
+            </div>
+          </div>
           <select
             id="minecraft-material"
             className="material-select"
@@ -491,7 +609,9 @@ export function App() {
             }}
           >
             <option value="">AUTO — closest compatible</option>
-            {result?.paletteItemIds.map((itemId) => <option value={itemId} key={itemId}>{itemId}</option>)}
+            {materialLibrary?.itemIds
+              .filter((itemId) => includedMaterials?.has(itemId) === true)
+              .map((itemId) => <option value={itemId} key={itemId}>{itemId}</option>)}
           </select>
           <div className="history-buttons">
             <button type="button" disabled={overrideUndo.current.length === 0} onClick={undoMaterialOverride}>UNDO</button>
@@ -513,26 +633,10 @@ export function App() {
             <div><dt>Catalog</dt><dd>{result?.catalog ?? '—'}</dd></div>
           </dl>
           {result !== undefined && materialUsage.length > 0 && <div className="material-list">
-            {materialUsage.map((paletteIndex) => <button type="button" title="Exclude and rebuild" onClick={() => {
-              const itemId = result.paletteItemIds[paletteIndex];
-              if (itemId !== undefined) setExcludedMaterials((current) => new Set([...current, itemId]));
-              setSettingsDirty(true);
-            }} key={result.paletteItemIds[paletteIndex]}>
+            {materialUsage.map((paletteIndex) => <div key={result.paletteItemIds[paletteIndex]}>
               <i style={{ background: `rgb(${Math.round((result.paletteSrgb[paletteIndex * 3] ?? 0.5) * 255)} ${(Math.round((result.paletteSrgb[paletteIndex * 3 + 1] ?? 0.5) * 255))} ${(Math.round((result.paletteSrgb[paletteIndex * 3 + 2] ?? 0.5) * 255))})` }} />
               <span>{(result.paletteItemIds[paletteIndex] ?? '').replace('minecraft:', '')}</span>
-            </button>)}
-          </div>}
-          {excludedMaterials.size > 0 && <div className="excluded-materials">
-            <p className="notice">{excludedMaterials.size} material(s) excluded. Rebuild to apply.</p>
-            {[...excludedMaterials].sort().map((itemId) => <button type="button" key={itemId} onClick={() => {
-              setExcludedMaterials((current) => {
-                const next = new Set(current);
-                next.delete(itemId);
-                return next;
-              });
-              setSettingsDirty(true);
-            }}>＋ {itemId.replace('minecraft:', '')}</button>)}
-            <button type="button" onClick={() => { setExcludedMaterials(new Set()); setSettingsDirty(true); }}>RESET EXCLUSIONS</button>
+            </div>)}
           </div>}
           {result?.previewTruncated === true && <p className="notice">Preview capped at 250k exact boxes.</p>}
         </section>
@@ -540,6 +644,7 @@ export function App() {
 
       <section className="viewport">
         <EditorScene
+          cameraClipEnd={cameraClipEnd}
           mesh={transformedMesh}
           optimizedColors={result?.previewColors}
           optimizedPaletteIndexes={result?.previewPaletteIndexes}

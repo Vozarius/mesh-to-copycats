@@ -112,11 +112,23 @@ button { color: inherit; }
 .stats-section dd { margin: 0; color: #d1d6ce; font: 500 10px 'DM Mono', monospace; text-transform: uppercase; }
 .notice { color: #a88f58; font: 9px/1.5 'DM Mono', monospace; }
 .success-notice { color: var(--acid); font: 9px/1.5 'DM Mono', monospace; }
+.include-materials { display: grid; gap: 8px; margin: 8px 0 14px; }
+.include-heading { display: flex; justify-content: space-between; color: #9aa299; font: 9px 'DM Mono', monospace; text-transform: uppercase; }
+.include-heading b { color: var(--acid); font-weight: 500; }
+.include-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.include-actions button { min-height: 30px; border: 1px solid #374039; background: #111612; color: #919b93; font: 8px 'DM Mono', monospace; cursor: pointer; }
+.include-actions button:hover:not(:disabled) { border-color: var(--acid); color: var(--acid); }
+.include-actions button:disabled { cursor: wait; opacity: .4; }
+.include-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; max-height: 285px; padding: 5px; overflow: auto; border: 1px solid #29312b; background: #090c0a; }
+.include-grid label { position: relative; display: grid; gap: 4px; min-width: 0; padding: 5px; border: 1px solid transparent; color: #677068; font: 7px/1.2 'DM Mono', monospace; cursor: pointer; }
+.include-grid label:hover { border-color: #4a554c; color: #c8cfc9; }
+.include-grid label.selected { border-color: #6e653c; background: rgba(216,174,76,.08); color: var(--acid); }
+.include-grid input { position: absolute; top: 7px; right: 7px; accent-color: var(--acid); }
+.include-grid canvas { width: 100%; aspect-ratio: 1; image-rendering: pixelated; object-fit: cover; background-image: linear-gradient(45deg,#202720 25%,transparent 25%),linear-gradient(-45deg,#202720 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#202720 75%),linear-gradient(-45deg,transparent 75%,#202720 75%); background-size: 8px 8px; }
+.include-grid span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .material-list { display: grid; gap: 7px; margin-top: 14px; }
-.material-list button { display: flex; align-items: center; gap: 9px; padding: 4px; border: 1px solid transparent; background: transparent; color: #89928a; font: 9px 'DM Mono', monospace; cursor: pointer; }
-.material-list button:hover { border-color: #3d473f; color: var(--acid); }
+.material-list div { display: flex; align-items: center; gap: 9px; padding: 4px; color: #89928a; font: 9px 'DM Mono', monospace; }
 .material-list i { width: 14px; height: 14px; border: 1px solid rgba(255,255,255,.18); }
-.excluded-materials { display: grid; gap: 5px; margin-top: 12px; }
 
 .viewport { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
 .scene { position: absolute; inset: 0; }

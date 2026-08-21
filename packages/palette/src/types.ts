@@ -52,6 +52,8 @@ export interface ExtractSurfaceSamplesOptions {
 }
 
 export interface ResolveMaterialOptions {
+  /** One byte per palette entry; zero excludes the entry from matching. */
+  readonly allowedPaletteIndexes?: Uint8Array;
   readonly catalog: import('../../shapes/src/index.js').PackedShapeCatalog;
   readonly geometryIds: Uint32Array;
   readonly palette: PackedMaterialPalette;

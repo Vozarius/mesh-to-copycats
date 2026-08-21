@@ -3,7 +3,7 @@ import type { PackedTriangleMesh } from '@mesh-to-copycats/mesh';
 export type QualityName = 'BALANCED' | 'FAST' | 'QUALITY';
 
 export interface OptimizeRequest {
-  readonly excludedMaterialItemIds: readonly string[];
+  readonly includedMaterialItemIds?: readonly string[];
   readonly materialOverrides: readonly string[];
   readonly mesh: PackedTriangleMesh;
   readonly quality: QualityName;
@@ -12,12 +12,28 @@ export interface OptimizeRequest {
   readonly type: 'optimize';
 }
 
+export interface LoadPaletteRequest {
+  readonly requestId: number;
+  readonly type: 'load-palette';
+}
+
 export interface CancelRequest {
   readonly requestId: number;
   readonly type: 'cancel';
 }
 
-export type WorkerRequest = CancelRequest | OptimizeRequest;
+export type WorkerRequest = CancelRequest | LoadPaletteRequest | OptimizeRequest;
+
+export interface PaletteResponse {
+  readonly itemIds: readonly string[];
+  readonly requestId: number;
+  readonly srgb: Float32Array;
+  readonly textureHeights: Uint16Array;
+  readonly textureOffsets: Uint32Array;
+  readonly textureRgbaSrgb: Uint8Array;
+  readonly textureWidths: Uint16Array;
+  readonly type: 'palette';
+}
 
 export interface ProgressResponse {
   readonly completed: number;
@@ -75,4 +91,4 @@ export interface ErrorResponse {
   readonly type: 'error';
 }
 
-export type WorkerResponse = CompleteResponse | ErrorResponse | ProgressResponse;
+export type WorkerResponse = CompleteResponse | ErrorResponse | PaletteResponse | ProgressResponse;

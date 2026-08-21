@@ -88,8 +88,9 @@ controlled ticks, consumed its own checklist (`copycat_board×8`, `stone×6`,
 `acacia_window×2`), preserved all eight exported per-part materials, and then
 the verifier removed the cannon and test structure.
 The optimized preview greedily boxes every selected part's exact 16³ mask.
-Clicking a reported material excludes it from the next solve; entries can be
-restored individually or reset from the sidebar.
+The material sidebar loads the complete generated texture library before a
+build. It supports search, Select all, Deselect all and per-block checkboxes;
+the solver only considers the explicitly included allow-list.
 Each OBJ/GLB source material slot can also be locked to a specific generated
 Minecraft material. Locks are checked through the same per-part compatibility,
 acceptance and placement pipeline as automatic matches, support undo/redo, and
@@ -98,6 +99,8 @@ The editor applies uniform Minecraft scale, XYZ rotation and block-space
 translation to both the Three preview and the Worker input, with Center + Ground
 and Reset controls. Source preview rendering preserves per-triangle material
 groups, linear base-color factors, alpha and every decoded embedded texture.
+The 3D viewport has no distance fog. Its configurable camera Clip end defaults
+to 1,000,000 blocks and uses a logarithmic depth buffer for the large range.
 The scale field accepts any positive finite value. A separate UV texture can be
 attached to any imported OBJ/GLB material slot. Locally planar cells are
 octantized and prefer exact Copycat Byte realizations, giving four independently

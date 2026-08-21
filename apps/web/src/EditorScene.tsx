@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { PackedTriangleMesh } from '@mesh-to-copycats/mesh';
 
 export interface EditorSceneProps {
+  readonly cameraClipEnd: number;
   readonly mesh: PackedTriangleMesh;
   readonly optimizedColors?: Float32Array;
   readonly optimizedPaletteIndexes?: Uint32Array;
@@ -18,6 +19,7 @@ export interface EditorSceneProps {
 }
 
 export function EditorScene({
+  cameraClipEnd,
   mesh,
   optimizedColors,
   optimizedPaletteIndexes,
@@ -36,10 +38,13 @@ export function EditorScene({
     if (host === null) return undefined;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('#0b0e0c');
-    scene.fog = new THREE.Fog('#0b0e0c', 28, 85);
-    const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 500);
+    const camera = new THREE.PerspectiveCamera(42, 1, 0.01, cameraClipEnd);
     camera.position.set(7, 6, 8);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      logarithmicDepthBuffer: true,
+      powerPreference: 'high-performance',
+    });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     host.append(renderer.domElement);
@@ -245,6 +250,7 @@ export function EditorScene({
       renderer.domElement.remove();
     };
   }, [
+    cameraClipEnd,
     mesh,
     optimizedColors,
     optimizedPaletteIndexes,

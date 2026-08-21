@@ -172,6 +172,7 @@ function evaluateRealization(
   shapeId: number,
   ownerCache: Map<number, Uint8Array>,
   sourceMaterialPaletteIndexes: Uint32Array | undefined,
+  allowedPaletteIndexes: Uint8Array | undefined,
 ): EvaluatedRealization {
   const start = catalog.shapePartOffsets[shapeId] ?? 0;
   const end = catalog.shapePartOffsets[shapeId + 1] ?? start;
@@ -266,6 +267,7 @@ function evaluateRealization(
       ? { *[Symbol.iterator]() { for (let index = 0; index < palette.size; index += 1) yield index; } }
       : [locked];
     for (const paletteIndex of paletteCandidates) {
+      if (allowedPaletteIndexes !== undefined && allowedPaletteIndexes[paletteIndex] !== 1) continue;
       const choice = materialChoice(
         palette,
         paletteIndex,
@@ -338,6 +340,7 @@ function preferred(
 
 export function resolveMaterials(options: ResolveMaterialOptions): PackedResolvedMaterials {
   const {
+    allowedPaletteIndexes,
     catalog,
     geometryIds,
     palette,
@@ -348,6 +351,9 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
   } = options;
   if (samples.cellOffsets.length !== geometryIds.length + 1) {
     throw new Error('Surface sample cell count does not match geometry grid');
+  }
+  if (allowedPaletteIndexes !== undefined && allowedPaletteIndexes.length !== palette.size) {
+    throw new Error('Allowed palette mask size does not match material palette');
   }
   if (preferredByteCells !== undefined && preferredByteCells.length !== geometryIds.length) {
     throw new Error('Preferred Byte cell count does not match geometry grid');
@@ -386,6 +392,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
           shapeId,
           ownerCache,
           sourceMaterialPaletteIndexes,
+          allowedPaletteIndexes,
         ),
         catalog,
         preferredByteCells?.[cell] === 1,

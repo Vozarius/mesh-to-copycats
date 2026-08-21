@@ -164,6 +164,26 @@ describe('post-material realization selection', () => {
     expect(resolved.acceptedMaterialBlockIds[0]).toBe('minecraft:stone');
   });
 
+  it('matches only material entries enabled by the include mask', () => {
+    const catalog = getFixtureCatalog();
+    const fullShape = catalog.findShapeId('fixture:full_cube', {})!;
+    const geometryIds = Uint32Array.of(catalog.shapeGeometry[fullShape]!);
+    const palette = createMaterialPalette([
+      { blockId: 'minecraft:stone', itemId: 'minecraft:stone', srgb: [0.5, 0.5, 0.5] },
+      { blockId: 'minecraft:red_concrete', itemId: 'minecraft:red_concrete', srgb: [0.8, 0.1, 0.1] },
+    ]);
+    const resolved = resolveMaterials({
+      allowedPaletteIndexes: Uint8Array.of(0, 1),
+      catalog,
+      geometryIds,
+      palette,
+      samples,
+    });
+
+    expect(resolved.invalidCells[0]).toBe(0);
+    expect(Array.from(resolved.paletteIndexes).every((index) => index === 1)).toBe(true);
+  });
+
   it('uses four independently colored Byte parts for a planar half-block target', () => {
     const catalog = getFixtureCatalog();
     const byteShape = catalog.blockIds.findIndex((blockId, shapeId) =>
