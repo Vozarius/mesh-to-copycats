@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  applyTextureToMeshMaterial,
   decodeEmbeddedMeshTextures,
   createCircleMesh,
   createPlaneMesh,
@@ -14,7 +15,7 @@ import {
 import { encodeCreateSchematic, type StructureCell } from '@mesh-to-copycats/minecraft-nbt';
 
 import { EditorScene } from './EditorScene.js';
-import { importImageAsPlane } from './image-mesh.js';
+import { decodeBrowserImageTexture, importImageAsPlane } from './image-mesh.js';
 import type {
   CompleteResponse,
   QualityName,
@@ -72,6 +73,7 @@ export function App() {
   const [progress, setProgress] = useState({ completed: 0, total: 0 });
   const [status, setStatus] = useState<'idle' | 'running' | 'complete' | 'error'>('idle');
   const [error, setError] = useState('');
+  const [exportNotice, setExportNotice] = useState('');
   const [result, setResult] = useState<CompleteResponse>();
   const [excludedMaterials, setExcludedMaterials] = useState<ReadonlySet<string>>(() => new Set());
   const [materialOverrides, setMaterialOverrides] = useState<readonly string[]>(['']);
@@ -124,6 +126,7 @@ export function App() {
     setStatus('idle');
     setView('original');
     setError('');
+    setExportNotice('');
     setMaterialOverrides(Array.from({ length: nextMesh.materialNames.length }, () => ''));
     setSelectedMaterialSlot(0);
     overrideUndo.current = [];
@@ -190,6 +193,17 @@ export function App() {
     selectMesh(imported, file.name);
   };
 
+  const importUvTexture = async (file: File) => {
+    const materialSlot = selectedMaterialSlot;
+    const texture = await decodeBrowserImageTexture(file);
+    setMesh((current) => applyTextureToMeshMaterial(current, texture, materialSlot));
+    setResult(undefined);
+    setStatus('idle');
+    setView('original');
+    setError('');
+    setExportNotice(`UV texture ${file.name} applied to material ${materialSlot}.`);
+  };
+
   const optimize = () => {
     if (worker.current === undefined) return;
     if (status === 'running') {
@@ -197,6 +211,7 @@ export function App() {
     }
     request.current++;
     setError('');
+    setExportNotice('');
     setProgress({ completed: 0, total: 0 });
     setStatus('running');
     const workerMesh: PackedTriangleMesh = {
@@ -300,10 +315,20 @@ export function App() {
       const anchor = document.createElement('a');
       anchor.href = url;
       anchor.download = `${filename.replace(/\.[^.]+$/u, '') || 'formwork'}.nbt`;
+      anchor.style.display = 'none';
+      document.body.append(anchor);
       anchor.click();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => {
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      }, 0);
       setError('');
+      setExportNotice(
+        `Downloaded ${anchor.download}: ${schematic.blockCount} blocks, ` +
+        `${schematic.paletteSize} states.`,
+      );
     } catch (reason) {
+      setExportNotice('');
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   };
@@ -336,7 +361,7 @@ export function App() {
         <div className="top-actions">
           <span className={`status-dot ${status}`} />
           <span>{status === 'running' ? 'Fitting geometry + materials' : settingsDirty ? 'Changes need rebuild' : status === 'complete' ? 'Ready to inspect' : 'Local workspace'}</span>
-          <button className="export-button" type="button" disabled={result === undefined || result.invalidMaterialCells > 0 || settingsDirty || status === 'running'} onClick={exportNbt}>EXPORT NBT</button>
+          <button className="export-button" type="button" disabled={result === undefined || status === 'running'} onClick={exportNbt}>EXPORT NBT</button>
         </div>
       </header>
 
@@ -377,9 +402,11 @@ export function App() {
 
         <section>
           <span className="section-index">02 / GEOMETRY</span>
-          <label className="field-label" htmlFor="scale">Minecraft scale <b>{scale.toFixed(2)}×</b></label>
-          <input id="scale" className="range" type="range" min="0.25" max="4" step="0.25" value={scale} onChange={(event) => {
-            setScale(Number(event.currentTarget.value));
+          <label className="field-label" htmlFor="scale">Minecraft scale <b>{formatNumber(scale)}×</b></label>
+          <input id="scale" className="material-select" type="number" min="0.001" step="0.25" value={scale} onChange={(event) => {
+            const next = event.currentTarget.valueAsNumber;
+            if (!Number.isFinite(next) || next <= 0) return;
+            setScale(next);
             setSettingsDirty(true);
           }} />
           <span className="field-label">Rotation XYZ (degrees)</span>
@@ -433,6 +460,24 @@ export function App() {
           }}>
             {mesh.materialNames.map((name, index) => <option value={index} key={`${index}:${name}`}>{index}: {name || 'unnamed'}</option>)}
           </select>
+          <label className={`texture-import ${mesh.texcoords === undefined ? 'disabled' : ''}`}>
+            <input
+              type="file"
+              accept="image/*"
+              disabled={mesh.texcoords === undefined}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = '';
+                if (file !== undefined) void importUvTexture(file).catch((reason: unknown) => {
+                  setExportNotice('');
+                  setError(reason instanceof Error ? reason.message : String(reason));
+                  setStatus('error');
+                });
+              }}
+            />
+            <strong>IMPORT UV TEXTURE</strong>
+            <span>{mesh.texcoords === undefined ? 'Mesh has no UV coordinates' : 'Apply image to selected source slot'}</span>
+          </label>
           <label className="field-label" htmlFor="minecraft-material">Minecraft material lock</label>
           <select
             id="minecraft-material"
@@ -453,6 +498,7 @@ export function App() {
             <button type="button" disabled={overrideRedo.current.length === 0} onClick={redoMaterialOverride}>REDO</button>
           </div>
           {materialOverrides.some((itemId) => itemId.length > 0) && <p className="notice">Material locks changed. Rebuild to validate and apply.</p>}
+          {exportNotice.length > 0 && <p className="success-notice">{exportNotice}</p>}
         </section>
 
         <section className="stats-section">

@@ -177,6 +177,74 @@ export function decodeEmbeddedMeshTextures(mesh: PackedTriangleMesh): PackedTria
   return { ...mesh, textureAtlas };
 }
 
+export function appendTextureAtlas(
+  base: PackedTextureAtlas | undefined,
+  appended: PackedTextureAtlas,
+): PackedTextureAtlas {
+  const baseCount = base?.widths.length ?? 0;
+  const appendedCount = appended.widths.length;
+  const baseBytes = base?.rgbaSrgb.length ?? 0;
+  const offsets = new Uint32Array(baseCount + appendedCount + 1);
+  if (base !== undefined) offsets.set(base.offsets.subarray(0, baseCount + 1));
+  for (let index = 0; index <= appendedCount; index += 1) {
+    offsets[baseCount + index] = baseBytes + (appended.offsets[index] ?? 0);
+  }
+  const rgbaSrgb = new Uint8Array(baseBytes + appended.rgbaSrgb.length);
+  if (base !== undefined) rgbaSrgb.set(base.rgbaSrgb);
+  rgbaSrgb.set(appended.rgbaSrgb, baseBytes);
+  const heights = new Uint16Array(baseCount + appendedCount);
+  const widths = new Uint16Array(baseCount + appendedCount);
+  const wrapS = new Uint32Array(baseCount + appendedCount);
+  const wrapT = new Uint32Array(baseCount + appendedCount);
+  if (base !== undefined) {
+    heights.set(base.heights);
+    widths.set(base.widths);
+    wrapS.set(base.wrapS);
+    wrapT.set(base.wrapT);
+  }
+  heights.set(appended.heights, baseCount);
+  widths.set(appended.widths, baseCount);
+  wrapS.set(appended.wrapS, baseCount);
+  wrapT.set(appended.wrapT, baseCount);
+  return { heights, offsets, rgbaSrgb, widths, wrapS, wrapT };
+}
+
+/** Attaches a decoded texture to one source material without discarding existing GLB textures. */
+export function applyTextureToMeshMaterial(
+  mesh: PackedTriangleMesh,
+  texture: PackedTextureAtlas,
+  materialIndex: number,
+  textureIndex = 0,
+): PackedTriangleMesh {
+  if (mesh.texcoords === undefined) throw new Error('The mesh has no UV coordinates');
+  if (!Number.isInteger(materialIndex) || materialIndex < 0 || materialIndex >= mesh.materialNames.length) {
+    throw new RangeError(`Material index ${materialIndex} is out of range`);
+  }
+  if (!Number.isInteger(textureIndex) || textureIndex < 0 || textureIndex >= texture.widths.length) {
+    throw new RangeError(`Texture index ${textureIndex} is out of range`);
+  }
+  const baseTextureCount = mesh.textureAtlas?.widths.length ?? 0;
+  const materialTextureIndexes = mesh.materialTextureIndexes?.slice() ??
+    new Int32Array(mesh.materialNames.length).fill(-1);
+  materialTextureIndexes[materialIndex] = baseTextureCount + textureIndex;
+  const materialBaseColorsLinear = mesh.materialBaseColorsLinear?.slice() ??
+    new Float32Array(mesh.materialNames.length * 4);
+  if (mesh.materialBaseColorsLinear === undefined) {
+    for (let material = 0; material < mesh.materialNames.length; material += 1) {
+      materialBaseColorsLinear.set([1, 1, 1, 1], material * 4);
+    }
+  }
+  materialBaseColorsLinear[materialIndex * 4] = 1;
+  materialBaseColorsLinear[materialIndex * 4 + 1] = 1;
+  materialBaseColorsLinear[materialIndex * 4 + 2] = 1;
+  return {
+    ...mesh,
+    materialBaseColorsLinear,
+    materialTextureIndexes,
+    textureAtlas: appendTextureAtlas(mesh.textureAtlas, texture),
+  };
+}
+
 function wrapped(value: number, mode: TextureWrapMode): number {
   if (mode === 33071) return Math.min(1, Math.max(0, value));
   if (mode === 33648) {

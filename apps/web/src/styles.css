@@ -80,6 +80,10 @@ button { color: inherit; }
 .field-label { display: flex; justify-content: space-between; margin: 16px 0 10px; color: #8e978f; font: 10px 'DM Mono', monospace; text-transform: uppercase; }
 .field-label b { color: var(--acid); font-weight: 500; }
 .material-select { width: 100%; min-height: 34px; padding: 0 8px; border: 1px solid #343b36; background: #0e120f; color: #a7afa8; font: 9px 'DM Mono', monospace; }
+.texture-import { display: grid; gap: 3px; margin-top: 9px; padding: 10px; border: 1px dashed #465149; color: #a7afa8; cursor: pointer; font: 8px/1.4 'DM Mono', monospace; }
+.texture-import input { display: none; }
+.texture-import strong { color: var(--acid); font-size: 9px; }
+.texture-import.disabled { opacity: .45; cursor: not-allowed; }
 .history-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 9px; }
 .history-buttons button { min-height: 29px; border: 1px solid #343b36; background: #0e120f; color: #7f8981; font: 8px 'DM Mono', monospace; cursor: pointer; }
 .history-buttons button:disabled { cursor: not-allowed; opacity: .35; }
@@ -107,6 +111,7 @@ button { color: inherit; }
 .stats-section dt { color: #727b74; font: 10px 'DM Mono', monospace; }
 .stats-section dd { margin: 0; color: #d1d6ce; font: 500 10px 'DM Mono', monospace; text-transform: uppercase; }
 .notice { color: #a88f58; font: 9px/1.5 'DM Mono', monospace; }
+.success-notice { color: var(--acid); font: 9px/1.5 'DM Mono', monospace; }
 .material-list { display: grid; gap: 7px; margin-top: 14px; }
 .material-list button { display: flex; align-items: center; gap: 9px; padding: 4px; border: 1px solid transparent; background: transparent; color: #89928a; font: 9px 'DM Mono', monospace; cursor: pointer; }
 .material-list button:hover { border-color: #3d473f; color: var(--acid); }

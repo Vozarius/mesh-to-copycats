@@ -31,6 +31,7 @@ export function createPlaneMesh(options: {
 
 export function createAlphaMaskedPlaneMesh(options: {
   readonly alphaThreshold?: number;
+  readonly depth?: number;
   readonly height: number;
   readonly textureAtlas: PackedTextureAtlas;
   readonly textureIndex?: number;
@@ -42,6 +43,8 @@ export function createAlphaMaskedPlaneMesh(options: {
     options.width <= 0 || options.height <= 0) {
     throw new RangeError('Plane dimensions must be positive and finite');
   }
+  const depth = options.depth ?? 0;
+  if (!Number.isFinite(depth)) throw new RangeError('Plane depth must be finite');
   if (!Number.isInteger(alphaThreshold) || alphaThreshold < 0 || alphaThreshold > 255) {
     throw new RangeError('Alpha threshold must be an integer in 0..255');
   }
@@ -86,7 +89,12 @@ export function createAlphaMaskedPlaneMesh(options: {
       const top = options.height / 2 - y / pixelHeight * options.height;
       const bottom = options.height / 2 - yEnd / pixelHeight * options.height;
       const vertex = positions.length / 3;
-      positions.push(left, bottom, 0, right, bottom, 0, right, top, 0, left, top, 0);
+      positions.push(
+        left, bottom, depth,
+        right, bottom, depth,
+        right, top, depth,
+        left, top, depth,
+      );
       texcoords.push(
         x / pixelWidth, yEnd / pixelHeight,
         xEnd / pixelWidth, yEnd / pixelHeight,

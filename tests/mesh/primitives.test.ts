@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyTextureToMeshMaterial,
   createCircleMesh,
   createAlphaMaskedPlaneMesh,
   createPlaneMesh,
@@ -50,6 +51,45 @@ describe('mesh primitives', () => {
     expect(mesh.indices.length / 3).toBe(4);
     expect(mesh.vertexCount).toBe(8);
     expect(Array.from(mesh.bounds)).toEqual([-1.5, -1, 0, 1.5, 1, 0]);
+  });
+
+  it('places image planes inside one depth cell for planar Byte ownership', () => {
+    const atlas = {
+      heights: Uint16Array.of(1),
+      offsets: Uint32Array.of(0, 4),
+      rgbaSrgb: Uint8Array.of(255, 255, 255, 255),
+      widths: Uint16Array.of(1),
+      wrapS: Uint32Array.of(33071),
+      wrapT: Uint32Array.of(33071),
+    };
+    const mesh = createAlphaMaskedPlaneMesh({ depth: 0.25, height: 1, textureAtlas: atlas, width: 1 });
+    expect(Array.from(mesh.bounds)).toEqual([-0.5, -0.5, 0.25, 0.5, 0.5, 0.25]);
+  });
+
+  it('attaches a UV texture without discarding an existing texture atlas', () => {
+    const mesh = createPlaneMesh({
+      textureAtlas: {
+        heights: Uint16Array.of(1),
+        offsets: Uint32Array.of(0, 4),
+        rgbaSrgb: Uint8Array.of(255, 0, 0, 255),
+        widths: Uint16Array.of(1),
+        wrapS: Uint32Array.of(33071),
+        wrapT: Uint32Array.of(33071),
+      },
+    });
+    const textured = applyTextureToMeshMaterial(mesh, {
+      heights: Uint16Array.of(1),
+      offsets: Uint32Array.of(0, 4),
+      rgbaSrgb: Uint8Array.of(0, 255, 0, 255),
+      widths: Uint16Array.of(1),
+      wrapS: Uint32Array.of(33071),
+      wrapT: Uint32Array.of(33071),
+    }, 0);
+    expect(Array.from(textured.textureAtlas?.rgbaSrgb ?? [])).toEqual([
+      255, 0, 0, 255, 0, 255, 0, 255,
+    ]);
+    expect(Array.from(textured.materialTextureIndexes ?? [])).toEqual([1]);
+    expect(Array.from(textured.materialBaseColorsLinear ?? []).slice(0, 3)).toEqual([1, 1, 1]);
   });
 
   it('rejects a fully transparent image plane', () => {

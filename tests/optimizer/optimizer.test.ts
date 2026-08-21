@@ -15,9 +15,12 @@ import {
 } from '../../packages/shared/src/index.js';
 import {
   AdaptiveOccupancy,
+  bitIndex,
+  createMask,
   DESCRIPTOR,
   mirrorMask,
   rotateMaskYClockwise,
+  setBit,
 } from '../../packages/voxelizer/src/index.js';
 
 const BYTE_PART_KEYS = [
@@ -254,6 +257,19 @@ describe('deterministic fixture optimization', () => {
 });
 
 describe('adaptive refinement', () => {
+  it('never leaves a requested surface voxel uncovered in coverage mode', () => {
+    const mask16 = createMask(16);
+    setBit(mask16, bitIndex(16, 3, 7, 11));
+    const result = qualityOptimizer.optimizeCell({
+      excludeAir: true,
+      occupancy: AdaptiveOccupancy.fromMask16(mask16),
+      requireCoverage: true,
+    });
+
+    expect(result.best.family).not.toBe(ShapeFamily.AIR);
+    expect(result.best.missingCount).toBe(0);
+  });
+
   it('stops at 4³ for AIR, at 8³ for a clear layer, and uses 16³ for a board alias', () => {
     const balanced = createGeometryOptimizer({
       catalog,

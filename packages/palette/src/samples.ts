@@ -95,6 +95,10 @@ function clippedSample(
   cellX: number,
   cellY: number,
   cellZ: number,
+  minimumUFraction = 0,
+  maximumUFraction = 1,
+  minimumVFraction = 0,
+  maximumVFraction = 1,
 ): ClippedSample | undefined {
   const abx = (vertices[3] ?? 0) - (vertices[0] ?? 0);
   const aby = (vertices[4] ?? 0) - (vertices[1] ?? 0);
@@ -125,10 +129,10 @@ function clippedSample(
   first.set(projected);
   const cell = [cellX, cellY, cellZ];
   let count = 3;
-  count = clipBoundary(first, count, second, 0, cell[uAxis] ?? 0, true);
-  count = clipBoundary(second, count, first, 0, (cell[uAxis] ?? 0) + 1, false);
-  count = clipBoundary(first, count, second, 1, cell[vAxis] ?? 0, true);
-  count = clipBoundary(second, count, first, 1, (cell[vAxis] ?? 0) + 1, false);
+  count = clipBoundary(first, count, second, 0, (cell[uAxis] ?? 0) + minimumUFraction, true);
+  count = clipBoundary(second, count, first, 0, (cell[uAxis] ?? 0) + maximumUFraction, false);
+  count = clipBoundary(first, count, second, 1, (cell[vAxis] ?? 0) + minimumVFraction, true);
+  count = clipBoundary(second, count, first, 1, (cell[vAxis] ?? 0) + maximumVFraction, false);
   if (count === 0) return undefined;
   let twiceArea = 0;
   let centroidU = 0;
@@ -197,6 +201,10 @@ export function extractSurfaceSamples(
   if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 64) {
     throw new RangeError('maxSamplesPerCell must be an integer in 1..64');
   }
+  const strata = options.strataPerAxis ?? 1;
+  if (strata !== 1 && strata !== 2) {
+    throw new RangeError('strataPerAxis must be 1 or 2');
+  }
   const sampleColor = options.sampleLinearColor ?? defaultColorSampler(mesh);
   const cellOffsets = new Uint32Array(surface.cellCount + 1);
   const localPositions: number[] = [];
@@ -221,14 +229,22 @@ export function extractSurfaceSamples(
           texture.push(mesh.texcoords[vertex * 2] ?? 0, mesh.texcoords[vertex * 2 + 1] ?? 0);
         }
       }
-      const sample = clippedSample(
-        vertices,
-        mesh.texcoords === undefined ? undefined : texture,
-        surface.cellX[cellIndex] ?? 0,
-        surface.cellY[cellIndex] ?? 0,
-        surface.cellZ[cellIndex] ?? 0,
-      );
-      if (sample !== undefined) candidates.push({ sample, triangle });
+      for (let stratumV = 0; stratumV < strata; stratumV += 1) {
+        for (let stratumU = 0; stratumU < strata; stratumU += 1) {
+          const sample = clippedSample(
+            vertices,
+            mesh.texcoords === undefined ? undefined : texture,
+            surface.cellX[cellIndex] ?? 0,
+            surface.cellY[cellIndex] ?? 0,
+            surface.cellZ[cellIndex] ?? 0,
+            stratumU / strata,
+            (stratumU + 1) / strata,
+            stratumV / strata,
+            (stratumV + 1) / strata,
+          );
+          if (sample !== undefined) candidates.push({ sample, triangle });
+        }
+      }
     }
     candidates.sort((left, right) =>
       right.sample.weight - left.sample.weight || left.triangle - right.triangle);

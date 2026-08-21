@@ -1,6 +1,6 @@
 import { createAlphaMaskedPlaneMesh, type PackedTriangleMesh, type PackedTextureAtlas } from '@mesh-to-copycats/mesh';
 
-export async function importImageAsPlane(file: File, alphaThreshold = 1): Promise<PackedTriangleMesh> {
+export async function decodeBrowserImageTexture(file: File): Promise<PackedTextureAtlas> {
   const bitmap = await createImageBitmap(file);
   try {
     if (bitmap.width < 1 || bitmap.height < 1 || bitmap.width > 0xffff || bitmap.height > 0xffff) {
@@ -16,7 +16,7 @@ export async function importImageAsPlane(file: File, alphaThreshold = 1): Promis
     if (context === null) throw new Error('2D canvas is unavailable');
     context.drawImage(bitmap, 0, 0);
     const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
-    const atlas: PackedTextureAtlas = {
+    return {
       heights: Uint16Array.of(bitmap.height),
       offsets: Uint32Array.of(0, pixels.length),
       rgbaSrgb: Uint8Array.from(pixels),
@@ -24,15 +24,24 @@ export async function importImageAsPlane(file: File, alphaThreshold = 1): Promis
       wrapS: Uint32Array.of(33071),
       wrapT: Uint32Array.of(33071),
     };
-    const maximumExtent = 4;
-    const landscape = bitmap.width >= bitmap.height;
-    return createAlphaMaskedPlaneMesh({
-      alphaThreshold,
-      height: landscape ? maximumExtent * bitmap.height / bitmap.width : maximumExtent,
-      textureAtlas: atlas,
-      width: landscape ? maximumExtent : maximumExtent * bitmap.width / bitmap.height,
-    });
   } finally {
     bitmap.close();
   }
+}
+
+export async function importImageAsPlane(file: File, alphaThreshold = 1): Promise<PackedTriangleMesh> {
+  const atlas = await decodeBrowserImageTexture(file);
+  const width = atlas.widths[0] ?? 1;
+  const height = atlas.heights[0] ?? 1;
+  const maximumExtent = 4;
+  const landscape = width >= height;
+  return createAlphaMaskedPlaneMesh({
+    alphaThreshold,
+    // Keep the plane inside one block-depth rather than exactly on a cell boundary. The
+    // planar-octant pipeline then produces four independently materialized Byte parts per face.
+    depth: 0.25,
+    height: landscape ? maximumExtent * height / width : maximumExtent,
+    textureAtlas: atlas,
+    width: landscape ? maximumExtent : maximumExtent * width / height,
+  });
 }

@@ -1,4 +1,4 @@
-import { AIR_OWNER } from '../../shared/src/index.js';
+import { AIR_OWNER, ShapeFamily } from '../../shared/src/index.js';
 import type {
   GeneratedMaterialAcceptanceProfileMetadata,
   PackedShapeCatalog,
@@ -319,9 +319,15 @@ function preferred(
   left: EvaluatedRealization | undefined,
   right: EvaluatedRealization,
   catalog: PackedShapeCatalog,
+  preferByte: boolean,
 ): EvaluatedRealization {
   if (left === undefined) return right;
   if (left.valid !== right.valid) return right.valid ? right : left;
+  if (preferByte) {
+    const leftIsByte = catalog.shapeFamily[left.shapeId] === ShapeFamily.BYTE;
+    const rightIsByte = catalog.shapeFamily[right.shapeId] === ShapeFamily.BYTE;
+    if (leftIsByte !== rightIsByte) return rightIsByte ? right : left;
+  }
   if (left.error !== right.error) return right.error < left.error ? right : left;
   if (left.safety !== right.safety) return right.safety < left.safety ? right : left;
   const leftComplexity = catalog.shapeComplexity[left.shapeId] ?? 0;
@@ -331,9 +337,20 @@ function preferred(
 }
 
 export function resolveMaterials(options: ResolveMaterialOptions): PackedResolvedMaterials {
-  const { catalog, geometryIds, palette, runtime, samples, sourceMaterialPaletteIndexes } = options;
+  const {
+    catalog,
+    geometryIds,
+    palette,
+    preferredByteCells,
+    runtime,
+    samples,
+    sourceMaterialPaletteIndexes,
+  } = options;
   if (samples.cellOffsets.length !== geometryIds.length + 1) {
     throw new Error('Surface sample cell count does not match geometry grid');
+  }
+  if (preferredByteCells !== undefined && preferredByteCells.length !== geometryIds.length) {
+    throw new Error('Preferred Byte cell count does not match geometry grid');
   }
   if (sourceMaterialPaletteIndexes !== undefined) {
     for (const index of sourceMaterialPaletteIndexes) {
@@ -371,6 +388,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
           sourceMaterialPaletteIndexes,
         ),
         catalog,
+        preferredByteCells?.[cell] === 1,
       );
     }
     if (best === undefined) throw new Error(`Geometry ${geometryIds[cell]} has no realizations`);

@@ -55,4 +55,26 @@ describe('sparse optimization pipeline', () => {
     expect(progress).toEqual([1, 2]);
     expect(yields).toBe(1);
   });
+
+  it('turns planar surface cells into exact Byte-compatible octants without AIR gaps', () => {
+    const catalog = getFixtureCatalog();
+    const mesh = finalizeMesh({
+      indices: [0, 1, 2, 0, 2, 3],
+      materialNames: ['image'],
+      positions: [0.1, 0.1, 0.25, 0.9, 0.1, 0.25, 0.9, 0.9, 0.25, 0.1, 0.9, 0.25],
+      texcoords: [0, 0, 1, 0, 1, 1, 0, 1],
+      triangleMaterials: [0, 0],
+    });
+    const result = optimizeMesh({
+      catalog,
+      mesh,
+      optimizerSettings: { missingWeight: 1024 },
+      preferPlanarByteGeometry: true,
+    });
+    expect(result.missingCounts[0]).toBe(0);
+    expect(result.planarBytePreferred[0]).toBe(1);
+    expect(catalog.blockIds[result.shapeIds[0] ?? 0]).not.toContain('air');
+    expect(Array.from(catalog.getRealizationShapeIds(result.geometryIds[0] ?? 0))
+      .map((shapeId) => catalog.blockIds[shapeId])).toContain('fixture:copycat_byte');
+  });
 });

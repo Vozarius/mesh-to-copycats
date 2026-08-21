@@ -90,6 +90,45 @@ if (
 ) {
   throw new Error(`Production source material lock did not resolve to ${forcedItemId}`);
 }
+const planarTextureMesh = finalizeMesh({
+  indices: [0, 1, 2, 0, 2, 3],
+  materialNames: ['uv-texture'],
+  positions: [0.1, 0.1, 0.25, 0.9, 0.1, 0.25, 0.9, 0.9, 0.25, 0.1, 0.9, 0.25],
+  texcoords: [0, 0, 1, 0, 1, 1, 0, 1],
+  triangleMaterials: [0, 0],
+});
+const planarOptimized = optimizeMesh({
+  catalog: runtime.catalog,
+  mesh: planarTextureMesh,
+  optimizerSettings: { missingWeight: 1024 },
+  preferPlanarByteGeometry: true,
+});
+const planarSamples = extractSurfaceSamples(planarTextureMesh, planarOptimized.surface, {
+  sampleLinearColor: ({ u, v }) => [u < 0.5 ? 1 : 0, v < 0.5 ? 1 : 0, u >= 0.5 && v >= 0.5 ? 1 : 0],
+  strataPerAxis: 2,
+});
+const planarMaterials = resolveMaterials({
+  catalog: runtime.catalog,
+  geometryIds: planarOptimized.geometryIds,
+  palette,
+  preferredByteCells: planarOptimized.planarBytePreferred,
+  runtime,
+  samples: planarSamples,
+});
+const planarBlocks = Array.from(planarMaterials.shapeIds, (shapeId) =>
+  runtime.catalog.blockIds[shapeId] ?? '');
+const planarPartCount = planarMaterials.cellPartOffsets[1] ?? 0;
+if (
+  planarOptimized.surface.cellCount !== 1 ||
+  planarOptimized.missingCounts[0] !== 0 ||
+  planarMaterials.invalidCells[0] !== 0 ||
+  planarBlocks[0] !== 'copycats:copycat_byte' ||
+  planarPartCount !== 4
+) {
+  throw new Error(
+    `Planar Byte verification failed: ${planarBlocks[0] ?? 'none'}, ${planarPartCount} parts`,
+  );
+}
 process.stdout.write(`${JSON.stringify({
   cells: optimized.surface.cellCount,
   neighborChanges: neighborResolution.changedCells,
@@ -98,5 +137,10 @@ process.stdout.write(`${JSON.stringify({
     .map((index) => palette.itemIds[index] ?? 'invalid'),
   selectedBlocks: Array.from(new Set(Array.from(materials.shapeIds)
     .map((shapeId) => runtime.catalog.blockIds[shapeId] ?? ''))),
+  planarTexture: {
+    block: planarBlocks[0],
+    materials: Array.from(planarMaterials.paletteIndexes, (index) => palette.itemIds[index] ?? 'invalid'),
+    parts: planarPartCount,
+  },
   valid: true,
 }, undefined, 2)}\n`);

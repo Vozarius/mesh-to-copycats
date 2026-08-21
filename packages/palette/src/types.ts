@@ -47,12 +47,16 @@ export interface PackedSurfaceSamples {
 export interface ExtractSurfaceSamplesOptions {
   readonly maxSamplesPerCell?: number;
   readonly sampleLinearColor?: SurfaceLinearColorSampler;
+  /** Splits each projected cell into 1x1 or 2x2 strata before UV/color sampling. */
+  readonly strataPerAxis?: 1 | 2;
 }
 
 export interface ResolveMaterialOptions {
   readonly catalog: import('../../shapes/src/index.js').PackedShapeCatalog;
   readonly geometryIds: Uint32Array;
   readonly palette: PackedMaterialPalette;
+  /** One per cell. Prefer a BYTE realization only where planar rasterization requested it. */
+  readonly preferredByteCells?: Uint8Array;
   readonly runtime?: import('../../shapes/src/index.js').WebRuntimeCatalog;
   readonly samples: PackedSurfaceSamples;
   /** Palette index per source mesh material, or 0xffffffff for automatic matching. */

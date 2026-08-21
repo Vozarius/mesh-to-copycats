@@ -49,6 +49,24 @@ describe('OKLab material profiles', () => {
     expect(samples.oklab[1]).toBeGreaterThan(0);
     expect(samples.oklab[4]).toBeGreaterThanOrEqual(-0.1);
   });
+
+  it('stratifies a planar UV cell into multiple texture samples', () => {
+    const mesh = finalizeMesh({
+      indices: [0, 1, 2, 0, 2, 3],
+      materialNames: ['textured'],
+      positions: [0, 0, 0.25, 1, 0, 0.25, 1, 1, 0.25, 0, 1, 0.25],
+      texcoords: [0, 0, 1, 0, 1, 1, 0, 1],
+      triangleMaterials: [0, 0],
+    });
+    const surface = rasterizeSparseSurface(mesh, { epsilon: 0 });
+    const samples = extractSurfaceSamples(mesh, surface, {
+      maxSamplesPerCell: 16,
+      strataPerAxis: 2,
+    });
+    expect(samples.cellOffsets[1]).toBeGreaterThanOrEqual(4);
+    expect(Math.min(...samples.uvs)).toBeLessThan(0.5);
+    expect(Math.max(...samples.uvs)).toBeGreaterThan(0.5);
+  });
 });
 
 describe('generated material palette', () => {
@@ -144,6 +162,55 @@ describe('post-material realization selection', () => {
     expect(resolved.paletteIndexes[0]).toBe(0);
     expect(resolved.materialDirections[0]).toBe(4);
     expect(resolved.acceptedMaterialBlockIds[0]).toBe('minecraft:stone');
+  });
+
+  it('uses four independently colored Byte parts for a planar half-block target', () => {
+    const catalog = getFixtureCatalog();
+    const byteShape = catalog.blockIds.findIndex((blockId, shapeId) =>
+      blockId === 'fixture:copycat_byte' &&
+      catalog.getShapeParts(shapeId).length === 4 &&
+      (catalog.states[shapeId] ?? '').includes('bottom_northwest=true') &&
+      (catalog.states[shapeId] ?? '').includes('bottom_northeast=true') &&
+      (catalog.states[shapeId] ?? '').includes('top_northwest=true') &&
+      (catalog.states[shapeId] ?? '').includes('top_northeast=true') &&
+      (catalog.states[shapeId] ?? '').includes('bottom_southwest=false') &&
+      (catalog.states[shapeId] ?? '').includes('bottom_southeast=false') &&
+      (catalog.states[shapeId] ?? '').includes('top_southwest=false') &&
+      (catalog.states[shapeId] ?? '').includes('top_southeast=false'));
+    expect(byteShape).toBeGreaterThanOrEqual(0);
+    const colors = [
+      srgbToOklab([1, 0, 0]),
+      srgbToOklab([0, 1, 0]),
+      srgbToOklab([0, 0, 1]),
+      srgbToOklab([1, 1, 1]),
+    ];
+    const resolved = resolveMaterials({
+      catalog,
+      geometryIds: Uint32Array.of(catalog.shapeGeometry[byteShape]!),
+      palette: createMaterialPalette([
+        { blockId: 'minecraft:red_concrete', itemId: 'minecraft:red_concrete', srgb: [1, 0, 0] },
+        { blockId: 'minecraft:lime_concrete', itemId: 'minecraft:lime_concrete', srgb: [0, 1, 0] },
+        { blockId: 'minecraft:blue_concrete', itemId: 'minecraft:blue_concrete', srgb: [0, 0, 1] },
+        { blockId: 'minecraft:white_concrete', itemId: 'minecraft:white_concrete', srgb: [1, 1, 1] },
+      ]),
+      samples: {
+        cellOffsets: Uint32Array.of(0, 4),
+        localPositions: Float32Array.from([
+          0.25, 0.25, 0.25,
+          0.75, 0.25, 0.25,
+          0.25, 0.75, 0.25,
+          0.75, 0.75, 0.25,
+        ]),
+        normals: Int8Array.from([0, 0, 127, 0, 0, 127, 0, 0, 127, 0, 0, 127]),
+        oklab: Float32Array.from(colors.flat()),
+        sourceMaterialIds: Uint32Array.of(0, 0, 0, 0),
+        triangleIds: Uint32Array.of(0, 0, 1, 1),
+        uvs: Float32Array.of(0.25, 0.25, 0.75, 0.25, 0.25, 0.75, 0.75, 0.75),
+        weights: Float32Array.of(1, 1, 1, 1),
+      },
+    });
+    expect(catalog.blockIds[resolved.shapeIds[0]!]).toBe('fixture:copycat_byte');
+    expect(new Set(resolved.paletteIndexes).size).toBe(4);
   });
 
   it('honors a source material lock while retaining realization validation', () => {

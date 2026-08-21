@@ -43,7 +43,11 @@ export const DEFAULT_OPTIMIZER_SETTINGS: OptimizerSettings = {
 
 export interface OptimizeCellInput {
   readonly descriptor?: ShapeDescriptor;
+  /** Surface pipelines use this to forbid a visible triangle cell from becoming AIR. */
+  readonly excludeAir?: boolean;
   readonly occupancy: TargetOccupancy;
+  /** Requires the selected candidate to contain every target voxel at the final GRID16 level. */
+  readonly requireCoverage?: boolean;
   readonly settings?: Partial<OptimizerSettings>;
 }
 

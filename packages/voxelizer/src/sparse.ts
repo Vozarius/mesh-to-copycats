@@ -1,4 +1,5 @@
-import { bitIndex, createMask, setBit } from './mask.js';
+import type { SurfaceStatistics } from './descriptor.js';
+import { bitIndex, createMask, getBit, setBit } from './mask.js';
 import { AdaptiveOccupancy } from './occupancy.js';
 
 const CELL_COORDINATE_BITS = 21;
@@ -399,4 +400,100 @@ export function createSparseCellOccupancy(
   cellIndex: number,
 ): AdaptiveOccupancy {
   return AdaptiveOccupancy.fromMask16(rasterizeSparseCellMask16(mesh, surface, cellIndex));
+}
+
+/** Expands every touched GRID16 voxel to its complete 8x8x8 octant. */
+export function createSparseCellOctantOccupancy(
+  mesh: TriangleMeshView,
+  surface: PackedSparseSurface,
+  cellIndex: number,
+): AdaptiveOccupancy {
+  const source = rasterizeSparseCellMask16(mesh, surface, cellIndex);
+  const occupiedOctants = new Uint8Array(8);
+  for (let z = 0; z < 16; z += 1) {
+    for (let y = 0; y < 16; y += 1) {
+      for (let x = 0; x < 16; x += 1) {
+        if (!getBit(source, bitIndex(16, x, y, z))) continue;
+        occupiedOctants[(x >= 8 ? 1 : 0) | (y >= 8 ? 2 : 0) | (z >= 8 ? 4 : 0)] = 1;
+      }
+    }
+  }
+  const expanded = createMask(16);
+  for (let octant = 0; octant < 8; octant += 1) {
+    if (occupiedOctants[octant] === 0) continue;
+    const startX = (octant & 1) === 0 ? 0 : 8;
+    const startY = (octant & 2) === 0 ? 0 : 8;
+    const startZ = (octant & 4) === 0 ? 0 : 8;
+    for (let z = startZ; z < startZ + 8; z += 1) {
+      for (let y = startY; y < startY + 8; y += 1) {
+        for (let x = startX; x < startX + 8; x += 1) {
+          setBit(expanded, bitIndex(16, x, y, z));
+        }
+      }
+    }
+  }
+  return AdaptiveOccupancy.fromMask16(expanded);
+}
+
+function triangleUnitNormal(
+  mesh: TriangleMeshView,
+  triangle: number,
+): readonly [x: number, y: number, z: number, area2: number] | undefined {
+  const a = mesh.indices[triangle * 3] ?? 0;
+  const b = mesh.indices[triangle * 3 + 1] ?? 0;
+  const c = mesh.indices[triangle * 3 + 2] ?? 0;
+  const ax = mesh.positions[a * 3] ?? 0;
+  const ay = mesh.positions[a * 3 + 1] ?? 0;
+  const az = mesh.positions[a * 3 + 2] ?? 0;
+  const abx = (mesh.positions[b * 3] ?? 0) - ax;
+  const aby = (mesh.positions[b * 3 + 1] ?? 0) - ay;
+  const abz = (mesh.positions[b * 3 + 2] ?? 0) - az;
+  const acx = (mesh.positions[c * 3] ?? 0) - ax;
+  const acy = (mesh.positions[c * 3 + 1] ?? 0) - ay;
+  const acz = (mesh.positions[c * 3 + 2] ?? 0) - az;
+  const nx = aby * acz - abz * acy;
+  const ny = abz * acx - abx * acz;
+  const nz = abx * acy - aby * acx;
+  const area2 = Math.hypot(nx, ny, nz);
+  return area2 <= 1e-15 ? undefined : [nx / area2, ny / area2, nz / area2, area2];
+}
+
+/** Area-weighted local normal statistics, with opposite winding treated as the same plane. */
+export function getSparseCellSurfaceStatistics(
+  mesh: TriangleMeshView,
+  surface: PackedSparseSurface,
+  cellIndex: number,
+): SurfaceStatistics {
+  const triangles = getSparseCellTriangles(surface, cellIndex);
+  let reference: readonly number[] | undefined;
+  let sumX = 0;
+  let sumY = 0;
+  let sumZ = 0;
+  let total = 0;
+  for (const triangle of triangles) {
+    const normal = triangleUnitNormal(mesh, triangle);
+    if (normal === undefined) continue;
+    reference ??= normal;
+    const alignment = (normal[0] * (reference[0] ?? 0) + normal[1] * (reference[1] ?? 0) +
+      normal[2] * (reference[2] ?? 0)) < 0 ? -1 : 1;
+    sumX += normal[0] * normal[3] * alignment;
+    sumY += normal[1] * normal[3] * alignment;
+    sumZ += normal[2] * normal[3] * alignment;
+    total += normal[3];
+  }
+  const length = Math.hypot(sumX, sumY, sumZ);
+  if (total === 0 || length === 0) {
+    return { normalVariance: 1, normalX: 0, normalY: 0, normalZ: 0 };
+  }
+  const normalX = sumX / length;
+  const normalY = sumY / length;
+  const normalZ = sumZ / length;
+  let variance = 0;
+  for (const triangle of triangles) {
+    const normal = triangleUnitNormal(mesh, triangle);
+    if (normal === undefined) continue;
+    const dot = Math.abs(normal[0] * normalX + normal[1] * normalY + normal[2] * normalZ);
+    variance += (1 - Math.min(1, dot)) * normal[3];
+  }
+  return { normalVariance: variance / total, normalX, normalY, normalZ };
 }

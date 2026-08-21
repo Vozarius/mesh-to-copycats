@@ -69,6 +69,39 @@ function isUnambiguous(
   return !equalWeightedScore(ranked[0]!, ranked[1]!) && normalizedMargin(ranked) >= threshold;
 }
 
+function coveringGeometryIds(
+  geometryIds: ArrayLike<number>,
+  target: Uint32Array,
+  resolution: Resolution,
+  catalog: PackedShapeCatalog,
+): number[] {
+  const pool = catalog.getMaskPool(resolution);
+  const words = target.length;
+  return Array.from(geometryIds).filter((geometryId) => {
+    const offset = catalog.geometryMaskOffset(geometryId, resolution);
+    for (let word = 0; word < words; word += 1) {
+      if (((target[word] ?? 0) & ~(pool[offset + word] ?? 0)) !== 0) return false;
+    }
+    return true;
+  });
+}
+
+function requiredCoverageCandidates(
+  geometryIds: readonly number[],
+  target: Uint32Array,
+  resolution: Resolution,
+  catalog: PackedShapeCatalog,
+): number[] {
+  const covering = coveringGeometryIds(geometryIds, target, resolution, catalog);
+  if (covering.length > 0) return covering;
+  const full = catalog.routeIndex.get('FULL');
+  if (full !== undefined) {
+    const fallback = coveringGeometryIds(full, target, resolution, catalog);
+    if (fallback.length > 0) return fallback;
+  }
+  throw new Error(`No geometry candidate covers the target at ${resolution}³`);
+}
+
 export class GeometryOptimizer {
   public readonly catalog: PackedShapeCatalog;
   readonly #settings: OptimizerSettings;
@@ -101,14 +134,28 @@ export class GeometryOptimizer {
 
     let started = now();
     const generated = generateCandidates(mask4, descriptor, settings, this.catalog);
+    let generatedGeometryIds = input.excludeAir === true
+      ? generated.geometryIds.filter((geometryId) => {
+          const shapeId = this.catalog.geometryRepresentativeShape[geometryId] ?? 0;
+          return (this.catalog.shapeFamily[shapeId] ?? 0) !== 0;
+        })
+      : generated.geometryIds;
+    if (input.requireCoverage === true) {
+      generatedGeometryIds = requiredCoverageCandidates(
+        generatedGeometryIds,
+        mask4,
+        4,
+        this.catalog,
+      );
+    }
     timings.candidateGeneration = settings.collectTimings ? now() - started : 0;
-    if (generated.geometryIds.length === 0) {
+    if (generatedGeometryIds.length === 0) {
       throw new Error('Candidate generation produced no shapes');
     }
 
     started = now();
     let ranked = rankGeometryCandidates(
-      generated.geometryIds,
+      generatedGeometryIds,
       mask4,
       4,
       settings.keepAfter4,
@@ -131,7 +178,8 @@ export class GeometryOptimizer {
     const needs8 =
       !obviousAt4 ||
       complex ||
-      settings.qualityMode === QualityMode.QUALITY;
+      settings.qualityMode === QualityMode.QUALITY ||
+      input.requireCoverage === true;
     if (needs8) {
       if (ranked.length > 1 && equalWeightedScore(ranked[0]!, ranked[1]!)) {
         refinementReasons.push('mask4-tie');
@@ -143,9 +191,17 @@ export class GeometryOptimizer {
         refinementReasons.push('mask4-low-margin');
       }
       const mask8 = input.occupancy.getMask(8);
+      const mask8Candidates = input.requireCoverage === true
+        ? requiredCoverageCandidates(
+            ranked.map(({ geometryId }) => geometryId),
+            mask8,
+            8,
+            this.catalog,
+          )
+        : ranked.map(({ geometryId }) => geometryId);
       started = now();
       ranked = rankGeometryCandidates(
-        ranked.map(({ geometryId }) => geometryId),
+        mask8Candidates,
         mask8,
         8,
         settings.keepAfter8,
@@ -161,12 +217,13 @@ export class GeometryOptimizer {
         ranked.length > 1 && equalWeightedScore(ranked[0]!, ranked[1]!);
       const lowMargin8 = !isUnambiguous(ranked, settings.ambiguityThreshold8);
       const needs16 =
-        settings.qualityMode !== QualityMode.FAST &&
-        ranked.length > 1 &&
-        (mask8Tied ||
-          lowMargin8 ||
-          settings.qualityMode === QualityMode.QUALITY ||
-          (complex && ranked[0]?.numerator !== 0));
+        input.requireCoverage === true ||
+        (settings.qualityMode !== QualityMode.FAST &&
+          ranked.length > 1 &&
+          (mask8Tied ||
+            lowMargin8 ||
+            settings.qualityMode === QualityMode.QUALITY ||
+            (complex && ranked[0]?.numerator !== 0)));
 
       if (needs16) {
         if (mask8Tied) refinementReasons.push('mask8-tie');
@@ -174,9 +231,17 @@ export class GeometryOptimizer {
         else if (complex) refinementReasons.push('surface-complexity');
         else refinementReasons.push('quality-mode');
         const mask16 = input.occupancy.getMask(16);
+        const mask16Candidates = input.requireCoverage === true
+          ? requiredCoverageCandidates(
+              ranked.map(({ geometryId }) => geometryId),
+              mask16,
+              16,
+              this.catalog,
+            )
+          : ranked.map(({ geometryId }) => geometryId);
         started = now();
         ranked = rankGeometryCandidates(
-          ranked.map(({ geometryId }) => geometryId),
+          mask16Candidates,
           mask16,
           16,
           Math.max(1, settings.alternatives + 1),
@@ -202,7 +267,7 @@ export class GeometryOptimizer {
         afterMask16,
         afterMask4,
         afterMask8,
-        candidatesGenerated: generated.geometryIds.length,
+        candidatesGenerated: generatedGeometryIds.length,
         genericCandidates: generated.genericCount,
         postingsScanned: generated.postingsScanned,
         refinementReasons,

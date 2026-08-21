@@ -30,6 +30,13 @@ pnpm web:dev
 pnpm web:build
 ```
 
+To test the editor, run `pnpm web:dev` from the repository root and open the
+local URL printed by Vite (normally `http://127.0.0.1:5173/`). Do not open
+`apps/web/index.html` directly: it is a Vite entry template whose TypeScript,
+Worker modules and catalog fetches require the development server. A production
+smoke test can be run with `pnpm web:build` followed by
+`pnpm --filter @mesh-to-copycats/web preview`.
+
 `tools/mod-extractor/neoforge` contains the pinned Minecraft 1.21.1 / NeoForge /
 Create / Copycats+ extraction environment. Before using version-sensitive APIs,
 the command verifies the exact loaded mod versions and aborts on a mismatch. It
@@ -91,6 +98,12 @@ The editor applies uniform Minecraft scale, XYZ rotation and block-space
 translation to both the Three preview and the Worker input, with Center + Ground
 and Reset controls. Source preview rendering preserves per-triangle material
 groups, linear base-color factors, alpha and every decoded embedded texture.
+The scale field accepts any positive finite value. A separate UV texture can be
+attached to any imported OBJ/GLB material slot. Locally planar cells are
+octantized and prefer exact Copycat Byte realizations, giving four independently
+matched material quadrants on a visible face; imported images use the same path.
+Coverage-constrained fitting forbids a selected non-air realization from
+leaving a rasterized surface voxel uncovered, while the interior remains hollow.
 
 Neighbour updates are compiled from the offline extraction evidence into a
 7.01 MiB checksummed sparse binary (546,579 changed probes), rather than being

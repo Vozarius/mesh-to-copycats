@@ -195,11 +195,23 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
             type: 'progress',
           } satisfies WorkerResponse);
         },
-        optimizerSettings: { qualityMode: qualityMode(request.quality) },
+        optimizerSettings: {
+          extraWeight: 1,
+          missingWeight: 1024,
+          qualityMode: qualityMode(request.quality),
+        },
+        preferPlanarByteGeometry: true,
         rasterizer: { scale: request.scale },
         signal: abort,
       });
       const excluded = new Set(request.excludedMaterialItemIds);
+      const uncoveredCells = result.missingCounts.reduce(
+        (count, missing) => count + (missing > 0 ? 1 : 0),
+        0,
+      );
+      if (uncoveredCells > 0) {
+        throw new Error(`Surface coverage invariant failed for ${uncoveredCells} cells`);
+      }
       const forcedItemIds = new Set(request.materialOverrides.filter((itemId) => itemId.length > 0));
       const palette = excluded.size === 0
         ? loaded.palette
@@ -230,11 +242,12 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
           });
       const neighborMs = performance.now() - neighborStarted;
       const materialStarted = performance.now();
-      const samples = extractSurfaceSamples(request.mesh, result.surface);
+      const samples = extractSurfaceSamples(request.mesh, result.surface, { strataPerAxis: 2 });
       const materials = resolveMaterials({
         catalog: loaded.catalog,
         geometryIds: neighbors.geometryIds,
         palette,
+        preferredByteCells: result.planarBytePreferred,
         ...(loaded.runtime === undefined ? {} : { runtime: loaded.runtime }),
         samples,
         sourceMaterialPaletteIndexes,
@@ -278,7 +291,9 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         materialDirections: materials.materialDirections,
         paletteIndexes: materials.paletteIndexes,
         paletteItemIds: palette.itemIds,
-        paletteSrgb: palette.srgb,
+        // Never transfer a buffer owned by the cached production palette. The first build would
+        // otherwise detach it and make every subsequent build fail in postMessage().
+        paletteSrgb: palette.srgb.slice(),
         paletteTextureHeights: palette.previewTextureAtlas?.heights.slice() ?? new Uint16Array(),
         paletteTextureOffsets: palette.previewTextureAtlas?.offsets.slice() ?? new Uint32Array(),
         paletteTextureRgbaSrgb: palette.previewTextureAtlas?.rgbaSrgb.slice() ?? new Uint8Array(),

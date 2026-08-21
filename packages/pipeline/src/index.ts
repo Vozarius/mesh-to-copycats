@@ -7,6 +7,9 @@ import {
 import type { PackedShapeCatalog } from '../../shapes/src/index.js';
 import {
   createSparseCellOccupancy,
+  createSparseCellOctantOccupancy,
+  getSparseCellSurfaceStatistics,
+  popcountMask,
   rasterizeSparseSurface,
   type PackedSparseSurface,
   type SparseRasterizeOptions,
@@ -23,6 +26,9 @@ export interface OptimizeMeshOptions {
   readonly mesh: PackedTriangleMesh;
   readonly onProgress?: (progress: SparsePipelineProgress) => void;
   readonly optimizerSettings?: Partial<OptimizerSettings>;
+  /** Converts locally planar surface cells to exact 2x2x2 octant targets. */
+  readonly preferPlanarByteGeometry?: boolean;
+  readonly planarNormalVarianceThreshold?: number;
   readonly rasterizer?: SparseRasterizeOptions;
   readonly signal?: OptimizerAbortSignal;
 }
@@ -36,6 +42,8 @@ export interface PackedOptimizedSparseGrid {
   readonly geometryErrors: Float32Array;
   readonly geometryIds: Uint32Array;
   readonly missingCounts: Uint16Array;
+  /** One for cells whose locally planar geometry can use Copycat Byte material quadrants. */
+  readonly planarBytePreferred: Uint8Array;
   readonly shapeIds: Uint32Array;
   readonly surface: PackedSparseSurface;
   readonly timingsMs: {
@@ -52,6 +60,7 @@ interface PipelineState {
   readonly geometryErrors: Float32Array;
   readonly geometryIds: Uint32Array;
   readonly missingCounts: Uint16Array;
+  readonly planarBytePreferred: Uint8Array;
   readonly optimizer: GeometryOptimizer;
   readonly shapeIds: Uint32Array;
   readonly surface: PackedSparseSurface;
@@ -81,6 +90,7 @@ function begin(options: OptimizeMeshOptions): {
       geometryErrors: new Float32Array(surface.cellCount),
       geometryIds: new Uint32Array(surface.cellCount),
       missingCounts: new Uint16Array(surface.cellCount),
+      planarBytePreferred: new Uint8Array(surface.cellCount),
       optimizer: new GeometryOptimizer({
         catalog: options.catalog,
         ...(options.optimizerSettings === undefined
@@ -103,9 +113,22 @@ function optimizeBatchRange(
   if (options.signal?.aborted === true) {
     throw new Error(`Mesh optimization aborted after ${start} cells`);
   }
-  const inputs = Array.from({ length: end - start }, (_value, offset) => ({
-    occupancy: createSparseCellOccupancy(options.mesh, state.surface, start + offset),
-  }));
+  const inputs = Array.from({ length: end - start }, (_value, offset) => {
+    const cell = start + offset;
+    const preferByte = options.preferPlanarByteGeometry === true &&
+      getSparseCellSurfaceStatistics(options.mesh, state.surface, cell).normalVariance <=
+        (options.planarNormalVarianceThreshold ?? 0.025);
+    state.planarBytePreferred[cell] = preferByte ? 1 : 0;
+    const occupancy = preferByte
+      ? createSparseCellOctantOccupancy(options.mesh, state.surface, start + offset)
+      : createSparseCellOccupancy(options.mesh, state.surface, start + offset);
+    const visible = popcountMask(occupancy.getMask(16)) > 0;
+    return {
+      excludeAir: visible,
+      occupancy,
+      requireCoverage: visible,
+    };
+  });
   const result = state.optimizer.optimizeBatch(inputs, {
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
@@ -128,6 +151,7 @@ function finish(
     geometryErrors: state.geometryErrors,
     geometryIds: state.geometryIds,
     missingCounts: state.missingCounts,
+    planarBytePreferred: state.planarBytePreferred,
     shapeIds: state.shapeIds,
     surface: state.surface,
     timingsMs: {
