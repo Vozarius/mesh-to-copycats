@@ -82,6 +82,7 @@ export interface CompleteResponse {
     readonly total: number;
   };
   readonly triangleCount: number;
+  readonly unresolvedMaterialCellCoordinates: readonly string[];
   readonly type: 'complete';
 }
 

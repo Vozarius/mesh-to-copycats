@@ -58,12 +58,12 @@ export interface ExtractSurfaceSamplesOptions {
 export interface ResolveMaterialOptions {
   /** One byte per palette entry; zero excludes the entry from matching. */
   readonly allowedPaletteIndexes?: Uint8Array;
-  /** Maximum absolute source/material opacity difference. Defaults to 0.15. */
+  /** Maximum absolute source/material opacity difference. Defaults to 0.05. */
   readonly alphaTolerance?: number;
   readonly catalog: import('../../shapes/src/index.js').PackedShapeCatalog;
   readonly geometryIds: Uint32Array;
   readonly palette: PackedMaterialPalette;
-  /** One per cell. Prefer a BYTE realization only where planar rasterization requested it. */
+  /** One per cell. Prefer BYTE only when the original geometry is an exact octant union. */
   readonly preferredByteCells?: Uint8Array;
   readonly runtime?: import('../../shapes/src/index.js').WebRuntimeCatalog;
   readonly samples: PackedSurfaceSamples;

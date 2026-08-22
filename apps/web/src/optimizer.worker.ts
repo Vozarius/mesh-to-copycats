@@ -217,7 +217,7 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
     try {
       const loaded = await loadCatalog();
       const result = await optimizeMeshProgressive({
-        batchSize: 128,
+        batchSize: 512,
         catalog: loaded.catalog,
         mesh: request.mesh,
         onProgress: ({ completed, total }) => {
@@ -355,6 +355,12 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
           total: result.timingsMs.total + materialMs + neighborMs,
         },
         triangleCount: request.mesh.indices.length / 3,
+        unresolvedMaterialCellCoordinates: Array.from(materials.invalidCells)
+          .flatMap((invalid, cell) => invalid === 0 ? [] : [
+            `${result.surface.cellX[cell] ?? 0},${result.surface.cellY[cell] ?? 0},` +
+              `${result.surface.cellZ[cell] ?? 0}`,
+          ])
+          .slice(0, 12),
         type: 'complete',
       };
       scope.postMessage(response, [

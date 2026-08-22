@@ -78,6 +78,31 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(value);
 }
 
+interface MaterialNamespaceGroup {
+  readonly indexes: readonly number[];
+  readonly namespace: string;
+}
+
+function groupMaterialIndexes(
+  itemIds: readonly string[],
+  filter: string,
+): readonly MaterialNamespaceGroup[] {
+  const normalized = filter.trim().toLowerCase();
+  const groups = new Map<string, number[]>();
+  for (let index = 0; index < itemIds.length; index += 1) {
+    const itemId = itemIds[index] ?? '';
+    if (!itemId.toLowerCase().includes(normalized)) continue;
+    const separator = itemId.indexOf(':');
+    const namespace = separator < 0 ? 'minecraft' : itemId.slice(0, separator);
+    const indexes = groups.get(namespace) ?? [];
+    indexes.push(index);
+    groups.set(namespace, indexes);
+  }
+  return [...groups.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([namespace, indexes]) => ({ indexes, namespace }));
+}
+
 interface ModelTransformState {
   readonly offsetX: number;
   readonly offsetY: number;
@@ -154,6 +179,10 @@ export function App() {
         setSettingsDirty(false);
         setProgress({ completed: response.cellX.length, total: response.cellX.length });
         setStatus('complete');
+        setError(response.invalidMaterialCells === 0
+          ? ''
+          : `${response.invalidMaterialCells} cells have no compatible included material; ` +
+            'they cannot be exported until the include/alpha/Copycats constraints are resolved.');
         setView('split');
       } else {
         setError(response.message);
@@ -337,7 +366,12 @@ export function App() {
       return;
     }
     if (result.invalidMaterialCells > 0) {
-      setError('Resolve every material before exporting a schematic.');
+      const coordinates = result.unresolvedMaterialCellCoordinates.join('; ');
+      setError(
+        `${result.invalidMaterialCells} cells have no compatible included material. ` +
+        'Check namespace selection, texture alpha and Copycats acceptance, then rebuild.' +
+        (coordinates.length === 0 ? '' : ` First cells: ${coordinates}.`),
+      );
       return;
     }
     try {
@@ -403,12 +437,9 @@ export function App() {
     ? 0
     : new Set(Array.from(result.paletteIndexes)
         .filter((index) => index < result.paletteItemIds.length)).size;
-  const filteredMaterialIndexes = materialLibrary === undefined
+  const materialGroups = materialLibrary === undefined
     ? []
-    : materialLibrary.itemIds
-        .map((_itemId, index) => index)
-        .filter((index) => (materialLibrary.itemIds[index] ?? '').toLowerCase()
-          .includes(materialFilter.trim().toLowerCase()));
+    : groupMaterialIndexes(materialLibrary.itemIds, materialFilter);
 
   return (
     <main className="app-shell">
@@ -573,27 +604,59 @@ export function App() {
                 setSettingsDirty(true);
               }}>DESELECT ALL</button>
             </div>
-            <div className="include-grid">
-              {materialLibrary === undefined && <p className="notice">Loading block textures…</p>}
-              {filteredMaterialIndexes.map((paletteIndex) => {
-                const itemId = materialLibrary?.itemIds[paletteIndex] ?? '';
-                const selected = includedMaterials?.has(itemId) === true;
-                return <label className={selected ? 'selected' : ''} key={itemId} title={itemId}>
-                  <input type="checkbox" checked={selected} onChange={(event) => {
-                    const checked = event.currentTarget.checked;
-                    setIncludedMaterials((current) => {
-                      const next = new Set(current);
-                      if (checked) next.add(itemId);
+            <div className="include-groups">
+              {materialLibrary === undefined && <p className="notice">Loading block textures...</p>}
+              {materialGroups.map((group) => {
+                const namespaceItems = group.indexes.map((index) =>
+                  materialLibrary!.itemIds[index] ?? '');
+                const selectedCount = namespaceItems.reduce(
+                  (count, itemId) => count + (includedMaterials?.has(itemId) === true ? 1 : 0),
+                  0,
+                );
+                const setGroupSelected = (selected: boolean) => {
+                  const namespaceSet = new Set(namespaceItems);
+                  setIncludedMaterials((current) => {
+                    const next = new Set(current);
+                    for (const itemId of namespaceItems) {
+                      if (selected) next.add(itemId);
                       else next.delete(itemId);
-                      return next;
-                    });
-                    if (!checked) setMaterialOverrides((current) =>
-                      current.map((locked) => locked === itemId ? '' : locked));
-                    setSettingsDirty(true);
-                  }} />
-                  <MaterialTexture index={paletteIndex} library={materialLibrary!} />
-                  <span>{itemId.replace(/^[^:]+:/u, '')}</span>
-                </label>;
+                    }
+                    return next;
+                  });
+                  if (!selected) setMaterialOverrides((current) =>
+                    current.map((locked) => namespaceSet.has(locked) ? '' : locked));
+                  setSettingsDirty(true);
+                };
+                return <div className="material-namespace" key={group.namespace}>
+                  <div className="namespace-heading">
+                    <strong>{group.namespace}</strong>
+                    <span>{selectedCount} / {group.indexes.length}</span>
+                    <button type="button" onClick={() => { setGroupSelected(true); }}>ALL</button>
+                    <button type="button" onClick={() => { setGroupSelected(false); }}>NONE</button>
+                  </div>
+                  <div className="include-grid">
+                    {group.indexes.map((paletteIndex) => {
+                      const itemId = materialLibrary!.itemIds[paletteIndex] ?? '';
+                      const selected = includedMaterials?.has(itemId) === true;
+                      return <label className={selected ? 'selected' : ''} key={itemId} title={itemId}>
+                        <input type="checkbox" checked={selected} onChange={(event) => {
+                          const checked = event.currentTarget.checked;
+                          setIncludedMaterials((current) => {
+                            const next = new Set(current);
+                            if (checked) next.add(itemId);
+                            else next.delete(itemId);
+                            return next;
+                          });
+                          if (!checked) setMaterialOverrides((current) =>
+                            current.map((locked) => locked === itemId ? '' : locked));
+                          setSettingsDirty(true);
+                        }} />
+                        <MaterialTexture index={paletteIndex} library={materialLibrary!} />
+                        <span>{itemId.replace(/^[^:]+:/u, '')}</span>
+                      </label>;
+                    })}
+                  </div>
+                </div>;
               })}
             </div>
           </div>

@@ -56,7 +56,7 @@ describe('sparse optimization pipeline', () => {
     expect(yields).toBe(1);
   });
 
-  it('turns planar surface cells into exact Byte-compatible octants without AIR gaps', () => {
+  it('keeps thin planar geometry exact instead of inflating it to Byte octants', () => {
     const catalog = getFixtureCatalog();
     const mesh = finalizeMesh({
       indices: [0, 1, 2, 0, 2, 3],
@@ -72,9 +72,9 @@ describe('sparse optimization pipeline', () => {
       preferPlanarByteGeometry: true,
     });
     expect(result.missingCounts[0]).toBe(0);
-    expect(result.planarBytePreferred[0]).toBe(1);
+    expect(result.planarBytePreferred[0]).toBe(0);
     expect(catalog.blockIds[result.shapeIds[0] ?? 0]).not.toContain('air');
     expect(Array.from(catalog.getRealizationShapeIds(result.geometryIds[0] ?? 0))
-      .map((shapeId) => catalog.blockIds[shapeId])).toContain('fixture:copycat_byte');
+      .map((shapeId) => catalog.blockIds[shapeId])).not.toContain('fixture:copycat_byte');
   });
 });

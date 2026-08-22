@@ -53,7 +53,7 @@ describe('mesh primitives', () => {
     expect(Array.from(mesh.bounds)).toEqual([-1.5, -1, 0, 1.5, 1, 0]);
   });
 
-  it('places image planes inside one depth cell for planar Byte ownership', () => {
+  it('places image planes inside one depth cell for exact thin-surface fitting', () => {
     const atlas = {
       heights: Uint16Array.of(1),
       offsets: Uint32Array.of(0, 4),

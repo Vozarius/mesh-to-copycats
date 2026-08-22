@@ -7,8 +7,8 @@ import {
 import type { PackedShapeCatalog } from '../../shapes/src/index.js';
 import {
   createSparseCellOccupancy,
-  createSparseCellOctantOccupancy,
   getSparseCellSurfaceStatistics,
+  maskToHex,
   popcountMask,
   rasterizeSparseSurface,
   type PackedSparseSurface,
@@ -26,7 +26,7 @@ export interface OptimizeMeshOptions {
   readonly mesh: PackedTriangleMesh;
   readonly onProgress?: (progress: SparsePipelineProgress) => void;
   readonly optimizerSettings?: Partial<OptimizerSettings>;
-  /** Converts locally planar surface cells to exact 2x2x2 octant targets. */
+  /** Prefers Byte realizations only for planar cells already equal to exact 8x8x8 octant unions. */
   readonly preferPlanarByteGeometry?: boolean;
   readonly planarNormalVarianceThreshold?: number;
   readonly rasterizer?: SparseRasterizeOptions;
@@ -42,7 +42,7 @@ export interface PackedOptimizedSparseGrid {
   readonly geometryErrors: Float32Array;
   readonly geometryIds: Uint32Array;
   readonly missingCounts: Uint16Array;
-  /** One for cells whose locally planar geometry can use Copycat Byte material quadrants. */
+  /** One for planar cells whose original GRID16 mask is an exact Byte octant union. */
   readonly planarBytePreferred: Uint8Array;
   readonly shapeIds: Uint32Array;
   readonly surface: PackedSparseSurface;
@@ -54,9 +54,19 @@ export interface PackedOptimizedSparseGrid {
   readonly usedResolutions: Uint8Array;
 }
 
+interface CachedGeometryResult {
+  readonly extraCount: number;
+  readonly geometryError: number;
+  readonly geometryId: number;
+  readonly missingCount: number;
+  readonly shapeId: number;
+  readonly usedResolution: number;
+}
+
 interface PipelineState {
   readonly batchSize: number;
   readonly extraCounts: Uint16Array;
+  readonly geometryCache: Map<string, CachedGeometryResult>;
   readonly geometryErrors: Float32Array;
   readonly geometryIds: Uint32Array;
   readonly missingCounts: Uint16Array;
@@ -87,6 +97,7 @@ function begin(options: OptimizeMeshOptions): {
     state: {
       batchSize: batchSize(options.batchSize),
       extraCounts: new Uint16Array(surface.cellCount),
+      geometryCache: new Map(),
       geometryErrors: new Float32Array(surface.cellCount),
       geometryIds: new Uint32Array(surface.cellCount),
       missingCounts: new Uint16Array(surface.cellCount),
@@ -104,6 +115,34 @@ function begin(options: OptimizeMeshOptions): {
   };
 }
 
+function isExactOctantUnion(occupancy: ReturnType<typeof createSparseCellOccupancy>): boolean {
+  const mask = occupancy.getMask(16);
+  const counts = new Uint16Array(8);
+  for (let z = 0; z < 16; z += 1) {
+    for (let y = 0; y < 16; y += 1) {
+      for (let x = 0; x < 16; x += 1) {
+        const bit = x + 16 * (y + 16 * z);
+        if (((mask[bit >>> 5] ?? 0) & (1 << (bit & 31))) === 0) continue;
+        counts[(x >= 8 ? 1 : 0) | (y >= 8 ? 2 : 0) | (z >= 8 ? 4 : 0)]! += 1;
+      }
+    }
+  }
+  return counts.every((count) => count === 0 || count === 512);
+}
+
+function applyCachedGeometry(
+  state: PipelineState,
+  cell: number,
+  cached: CachedGeometryResult,
+): void {
+  state.extraCounts[cell] = cached.extraCount;
+  state.geometryErrors[cell] = cached.geometryError;
+  state.geometryIds[cell] = cached.geometryId;
+  state.missingCounts[cell] = cached.missingCount;
+  state.shapeIds[cell] = cached.shapeId;
+  state.usedResolutions[cell] = cached.usedResolution;
+}
+
 function optimizeBatchRange(
   options: OptimizeMeshOptions,
   state: PipelineState,
@@ -113,31 +152,61 @@ function optimizeBatchRange(
   if (options.signal?.aborted === true) {
     throw new Error(`Mesh optimization aborted after ${start} cells`);
   }
-  const inputs = Array.from({ length: end - start }, (_value, offset) => {
-    const cell = start + offset;
+  const pendingInputs: Array<{
+    readonly excludeAir: boolean;
+    readonly occupancy: ReturnType<typeof createSparseCellOccupancy>;
+    readonly requireCoverage: boolean;
+  }> = [];
+  const pendingKeys: string[] = [];
+  const pendingCells = new Map<string, number[]>();
+  for (let cell = start; cell < end; cell += 1) {
+    const occupancy = createSparseCellOccupancy(options.mesh, state.surface, cell);
+    const mask16 = occupancy.getMask(16);
     const preferByte = options.preferPlanarByteGeometry === true &&
       getSparseCellSurfaceStatistics(options.mesh, state.surface, cell).normalVariance <=
-        (options.planarNormalVarianceThreshold ?? 0.025);
+        (options.planarNormalVarianceThreshold ?? 0.025) &&
+      isExactOctantUnion(occupancy);
     state.planarBytePreferred[cell] = preferByte ? 1 : 0;
-    const occupancy = preferByte
-      ? createSparseCellOctantOccupancy(options.mesh, state.surface, start + offset)
-      : createSparseCellOccupancy(options.mesh, state.surface, start + offset);
-    const visible = popcountMask(occupancy.getMask(16)) > 0;
-    return {
+    const visible = popcountMask(mask16) > 0;
+    const key = maskToHex(mask16);
+    const cached = state.geometryCache.get(key);
+    if (cached !== undefined) {
+      applyCachedGeometry(state, cell, cached);
+      continue;
+    }
+    const cells = pendingCells.get(key);
+    if (cells !== undefined) {
+      cells.push(cell);
+      continue;
+    }
+    pendingCells.set(key, [cell]);
+    pendingKeys.push(key);
+    pendingInputs.push({
       excludeAir: visible,
       occupancy,
       requireCoverage: visible,
-    };
-  });
-  const result = state.optimizer.optimizeBatch(inputs, {
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-  });
-  state.extraCounts.set(result.extraCounts, start);
-  state.geometryErrors.set(result.geometryErrors, start);
-  state.geometryIds.set(result.geometryIds, start);
-  state.missingCounts.set(result.missingCounts, start);
-  state.shapeIds.set(result.shapeIds, start);
-  state.usedResolutions.set(result.usedResolutions, start);
+    });
+  }
+  if (pendingInputs.length > 0) {
+    const result = state.optimizer.optimizeBatch(pendingInputs, {
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    for (let index = 0; index < pendingInputs.length; index += 1) {
+      const key = pendingKeys[index]!;
+      const cached: CachedGeometryResult = {
+        extraCount: result.extraCounts[index] ?? 0,
+        geometryError: result.geometryErrors[index] ?? 0,
+        geometryId: result.geometryIds[index] ?? 0,
+        missingCount: result.missingCounts[index] ?? 0,
+        shapeId: result.shapeIds[index] ?? 0,
+        usedResolution: result.usedResolutions[index] ?? 0,
+      };
+      state.geometryCache.set(key, cached);
+      for (const cell of pendingCells.get(key) ?? []) {
+        applyCachedGeometry(state, cell, cached);
+      }
+    }
+  }
   options.onProgress?.({ completed: end, total: state.surface.cellCount });
 }
 

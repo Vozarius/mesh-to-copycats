@@ -44,6 +44,10 @@ interface MaterialChoice {
   readonly state: string;
 }
 
+interface CachedMaterialChoice extends MaterialChoice {
+  readonly paletteIndex: number;
+}
+
 function materialChoice(
   palette: PackedMaterialPalette,
   paletteIndex: number,
@@ -174,6 +178,7 @@ function evaluateRealization(
   ownerCache: Map<number, Uint8Array>,
   sourceMaterialPaletteIndexes: Uint32Array | undefined,
   allowedPaletteIndexes: Uint8Array | undefined,
+  choiceCache: Map<string, readonly CachedMaterialChoice[]>,
   alphaTolerance: number,
 ): EvaluatedRealization {
   const start = catalog.shapePartOffsets[shapeId] ?? 0;
@@ -273,23 +278,50 @@ function evaluateRealization(
     const partLockedWeights = lockedWeights[localPart]!;
     const locked = [...(partLockedWeights.size > 0 ? partLockedWeights : overallLockedWeights).entries()]
       .sort((left, right) => right[1] - left[1] || left[0] - right[0])[0]?.[0];
-    const paletteCandidates: Iterable<number> = locked === undefined
-      ? { *[Symbol.iterator]() { for (let index = 0; index < palette.size; index += 1) yield index; } }
-      : [locked];
-    for (const paletteIndex of paletteCandidates) {
-      if (allowedPaletteIndexes !== undefined && allowedPaletteIndexes[paletteIndex] !== 1) continue;
+    const compatibility = catalog.partCompatibility[start + localPart] ?? 0xffff_ffff;
+    let choices: readonly CachedMaterialChoice[];
+    if (locked !== undefined) {
+      const choice = allowedPaletteIndexes !== undefined && allowedPaletteIndexes[locked] !== 1
+        ? undefined
+        : materialChoice(
+            palette,
+            locked,
+            compatibility,
+            blockId,
+            shapeState,
+            profile,
+            directionOrder,
+          );
+      choices = choice === undefined ? [] : [{ ...choice, paletteIndex: locked }];
+    } else {
+      const cacheKey = `${shapeId}:${localPart}:${directionOrder.join('')}`;
+      const cached = choiceCache.get(cacheKey);
+      if (cached !== undefined) choices = cached;
+      else {
+        const built: CachedMaterialChoice[] = [];
+        for (let paletteIndex = 0; paletteIndex < palette.size; paletteIndex += 1) {
+          if (allowedPaletteIndexes !== undefined && allowedPaletteIndexes[paletteIndex] !== 1) {
+            continue;
+          }
+          const choice = materialChoice(
+            palette,
+            paletteIndex,
+            compatibility,
+            blockId,
+            shapeState,
+            profile,
+            directionOrder,
+          );
+          if (choice !== undefined) built.push({ ...choice, paletteIndex });
+        }
+        choices = built;
+        choiceCache.set(cacheKey, choices);
+      }
+    }
+    for (const choice of choices) {
+      const paletteIndex = choice.paletteIndex;
       const alphaDifference = Math.abs((palette.alpha[paletteIndex] ?? 1) - targetAlpha);
       if (alphaDifference > alphaTolerance) continue;
-      const choice = materialChoice(
-        palette,
-        paletteIndex,
-        catalog.partCompatibility[start + localPart] ?? 0xffff_ffff,
-        blockId,
-        shapeState,
-        profile,
-        directionOrder,
-      );
-      if (choice === undefined) continue;
       const error = oklabDistanceSquared(target, paletteOklab(palette, paletteIndex)) +
         alphaDifference * alphaDifference * 0.25;
       const preference = palette.preference[paletteIndex] ?? 0;
@@ -340,13 +372,16 @@ function preferred(
 ): EvaluatedRealization {
   if (left === undefined) return right;
   if (left.valid !== right.valid) return right.valid ? right : left;
+  if (left.error !== right.error) return right.error < left.error ? right : left;
+  if (left.safety !== right.safety) return right.safety < left.safety ? right : left;
+  const leftIsCopycat = isCopycat(catalog.blockIds[left.shapeId] ?? '');
+  const rightIsCopycat = isCopycat(catalog.blockIds[right.shapeId] ?? '');
+  if (leftIsCopycat !== rightIsCopycat) return rightIsCopycat ? left : right;
   if (preferByte) {
     const leftIsByte = catalog.shapeFamily[left.shapeId] === ShapeFamily.BYTE;
     const rightIsByte = catalog.shapeFamily[right.shapeId] === ShapeFamily.BYTE;
     if (leftIsByte !== rightIsByte) return rightIsByte ? right : left;
   }
-  if (left.error !== right.error) return right.error < left.error ? right : left;
-  if (left.safety !== right.safety) return right.safety < left.safety ? right : left;
   const leftComplexity = catalog.shapeComplexity[left.shapeId] ?? 0;
   const rightComplexity = catalog.shapeComplexity[right.shapeId] ?? 0;
   if (leftComplexity !== rightComplexity) return rightComplexity < leftComplexity ? right : left;
@@ -356,7 +391,7 @@ function preferred(
 export function resolveMaterials(options: ResolveMaterialOptions): PackedResolvedMaterials {
   const {
     allowedPaletteIndexes,
-    alphaTolerance = 0.15,
+    alphaTolerance = 0.05,
     catalog,
     geometryIds,
     palette,
@@ -397,6 +432,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
   const targetOklab: number[] = [];
   const targetAlpha: number[] = [];
   const ownerCache = new Map<number, Uint8Array>();
+  const choiceCache = new Map<string, readonly CachedMaterialChoice[]>();
   for (let cell = 0; cell < geometryIds.length; cell += 1) {
     cellPartOffsets[cell] = partIds.length;
     let best: EvaluatedRealization | undefined;
@@ -413,6 +449,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
           ownerCache,
           sourceMaterialPaletteIndexes,
           allowedPaletteIndexes,
+          choiceCache,
           alphaTolerance,
         ),
         catalog,

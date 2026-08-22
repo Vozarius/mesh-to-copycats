@@ -102,9 +102,9 @@ groups, linear base-color factors, alpha and every decoded embedded texture.
 The 3D viewport has no distance fog. Its configurable camera Clip end defaults
 to 1,000,000 blocks and uses a logarithmic depth buffer for the large range.
 The scale field accepts any positive finite value. A separate UV texture can be
-attached to any imported OBJ/GLB material slot. Locally planar cells are
-octantized and prefer exact Copycat Byte realizations, giving four independently
-matched material quadrants on a visible face; imported images use the same path.
+attached to any imported OBJ/GLB material slot. Locally planar cells retain their original GRID16 mask. Copycat Byte is preferred
+only when that mask is already an exact union of complete 8x8x8 octants; thin
+surfaces remain eligible for mathematically closer panels and half-layers.
 Coverage-constrained fitting forbids a selected non-air realization from
 leaving a rasterized surface voxel uncovered, while the interior remains hollow.
 
@@ -120,7 +120,7 @@ GLB `baseColorFactor` is retained as a linear material multiplier, matching the
 Embedded non-interlaced PNG `baseColorTexture` images are decoded into a packed
 RGBA atlas and sampled through UVs before OKLab matching. A deterministic
 resource-JAR generator resolves blockstates, inherited models, texture aliases,
-indexed PNG palettes and exact texture signatures. It also embeds a deterministic 16x16 first-frame preview and mean alpha for each resolved material. Nested `META-INF/jarjar` resources are traversed for bundled addons. The pinned addon output contains 2,053 accepted material items (only `create:limestone` lacks a resolvable texture): Aeronautics 18, Create Deco 173, Railways 896, Create Big Cannons 7, Farmer's Delight 14 and TFMG 185, alongside Create and Minecraft. Transparent source samples are matched only to palette entries within the configured alpha tolerance (default 0.15). External GLB images, tint-index biome colors and resource-
+indexed PNG palettes and exact texture signatures. It also embeds a deterministic 16x16 first-frame preview and mean alpha for each resolved material. Nested `META-INF/jarjar` resources are traversed for bundled addons. The pinned addon output contains 2,053 accepted material items (only `create:limestone` lacks a resolvable texture): Aeronautics 18, Create Deco 173, Railways 896, Create Big Cannons 7, Farmer's Delight 14 and TFMG 185, alongside Create and Minecraft. Transparent source samples are matched only to palette entries within the configured alpha tolerance (default 0.05). External GLB images, tint-index biome colors and resource-
 pack overrides beyond the supplied JAR order remain explicit limits. Imported
 image alpha is converted into greedy sparse rectangles before rasterization;
 the adjustable cutoff removes transparent background from geometry while

@@ -18,7 +18,7 @@ button { color: inherit; }
 
 .app-shell {
   display: grid;
-  grid-template: 72px minmax(0, 1fr) / 330px minmax(0, 1fr);
+  grid-template: 72px minmax(0, 1fr) / 460px minmax(0, 1fr);
   width: 100%;
   height: 100%;
   background: #0b0e0c;
@@ -28,7 +28,7 @@ button { color: inherit; }
   z-index: 5;
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 330px 1fr auto;
+  grid-template-columns: 460px 1fr auto;
   align-items: center;
   border-bottom: 1px solid var(--line);
   background: rgba(14, 18, 15, 0.96);
@@ -119,12 +119,18 @@ button { color: inherit; }
 .include-actions button { min-height: 30px; border: 1px solid #374039; background: #111612; color: #919b93; font: 8px 'DM Mono', monospace; cursor: pointer; }
 .include-actions button:hover:not(:disabled) { border-color: var(--acid); color: var(--acid); }
 .include-actions button:disabled { cursor: wait; opacity: .4; }
-.include-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; max-height: 285px; padding: 5px; overflow: auto; border: 1px solid #29312b; background: #090c0a; }
-.include-grid label { position: relative; display: grid; gap: 4px; min-width: 0; padding: 5px; border: 1px solid transparent; color: #677068; font: 7px/1.2 'DM Mono', monospace; cursor: pointer; }
+.include-groups { display: grid; gap: 8px; max-height: 390px; padding: 5px; overflow: auto; border: 1px solid #29312b; background: #090c0a; }
+.material-namespace { border: 1px solid #202820; background: #0d110e; }
+.namespace-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 5px; min-height: 27px; padding: 3px 5px; border-bottom: 1px solid #263029; color: #7d877f; font: 7px 'DM Mono', monospace; text-transform: uppercase; }
+.namespace-heading strong { overflow: hidden; color: #b5bdb6; font-size: 8px; text-overflow: ellipsis; }
+.namespace-heading button { min-height: 20px; padding: 0 5px; border: 1px solid #344038; background: #111612; color: #7f8981; font: 6px 'DM Mono', monospace; cursor: pointer; }
+.namespace-heading button:hover { border-color: var(--acid); color: var(--acid); }
+.include-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; padding: 4px; }
+.include-grid label { position: relative; display: grid; gap: 2px; min-width: 0; padding: 2px; border: 1px solid transparent; color: #677068; font: 6px/1.1 'DM Mono', monospace; cursor: pointer; }
 .include-grid label:hover { border-color: #4a554c; color: #c8cfc9; }
 .include-grid label.selected { border-color: #6e653c; background: rgba(216,174,76,.08); color: var(--acid); }
-.include-grid input { position: absolute; top: 7px; right: 7px; accent-color: var(--acid); }
-.include-grid canvas { width: 100%; aspect-ratio: 1; image-rendering: pixelated; object-fit: cover; background-image: linear-gradient(45deg,#202720 25%,transparent 25%),linear-gradient(-45deg,#202720 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#202720 75%),linear-gradient(-45deg,transparent 75%,#202720 75%); background-size: 8px 8px; }
+.include-grid input { position: absolute; top: 2px; right: 2px; width: 10px; height: 10px; margin: 0; accent-color: var(--acid); }
+.include-grid canvas { width: 100%; aspect-ratio: 1; image-rendering: pixelated; object-fit: cover; background-image: linear-gradient(45deg,#202720 25%,transparent 25%),linear-gradient(-45deg,#202720 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#202720 75%),linear-gradient(-45deg,transparent 75%,#202720 75%); background-size: 6px 6px; }
 .include-grid span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .material-list { display: grid; gap: 7px; margin-top: 14px; }
 .material-list div { display: flex; align-items: center; gap: 9px; padding: 4px; color: #89928a; font: 9px 'DM Mono', monospace; }

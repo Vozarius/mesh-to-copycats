@@ -37,8 +37,8 @@ export async function importImageAsPlane(file: File, alphaThreshold = 1): Promis
   const landscape = width >= height;
   return createAlphaMaskedPlaneMesh({
     alphaThreshold,
-    // Keep the plane inside one block-depth rather than exactly on a cell boundary. The
-    // planar-octant pipeline then produces four independently materialized Byte parts per face.
+    // Keep the plane inside one block-depth rather than exactly on a cell boundary.
+    // Geometry fitting preserves this thin surface instead of inflating it to Byte octants.
     depth: 0.25,
     height: landscape ? maximumExtent * height / width : maximumExtent,
     textureAtlas: atlas,
