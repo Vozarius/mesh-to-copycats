@@ -14,6 +14,7 @@ function sourceDocument(): unknown {
     sources: {
       minecraft: '1.21.1',
       loader: 'neoforge-21.1.219',
+      addons: 'createdeco@2.1.3,tfmg@1.2.0',
       create: '6.0.10',
       copycats: '3.0.4+mc.1.21.1-neoforge',
       environment: `m2c-environment-v1:sha256:${'a'.repeat(64)}`,
@@ -71,6 +72,7 @@ describe('extracted catalog interchange', () => {
 
     const artifacts = encodeGeneratedCatalog(catalog, document.sources);
     expect(artifacts.metadata.sources.minecraft).toBe('1.21.1');
+    expect(artifacts.metadata.sources.addons).toBe('createdeco@2.1.3,tfmg@1.2.0');
     expect(artifacts.metadata.sources.environment).toBe(
       `m2c-environment-v1:sha256:${'a'.repeat(64)}`,
     );

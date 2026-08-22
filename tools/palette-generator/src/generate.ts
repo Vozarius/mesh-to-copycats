@@ -49,13 +49,22 @@ function identifier(value: string, defaultNamespace: string): [namespace: string
 }
 
 const resources = new Map<string, Uint8Array>();
-const sources = jarPaths.map((path) => {
-  const absolute = resolve(path);
-  const bytes = readFileSync(absolute);
+
+function loadArchiveAssets(bytes: Uint8Array, label: string, depth = 0): void {
+  if (depth > 4) throw new Error(`Nested archive depth exceeded at ${label}`);
   const archive = unzipSync(bytes);
   for (const [name, data] of Object.entries(archive)) {
     if (name.startsWith('assets/')) resources.set(name, data);
+    else if (/^META-INF\/jarjar\/[^/]+\.jar$/u.test(name)) {
+      loadArchiveAssets(data, `${label}!/${name}`, depth + 1);
+    }
   }
+}
+
+const sources = jarPaths.map((path) => {
+  const absolute = resolve(path);
+  const bytes = readFileSync(absolute);
+  loadArchiveAssets(bytes, basename(path));
   return { name: basename(path), sha256: createHash('sha256').update(bytes).digest('hex') };
 });
 
@@ -181,7 +190,7 @@ function decodedTexture(path: string): ReturnType<typeof decodePng> | undefined 
   }
 }
 
-function averageTexture(path: string): readonly [number, number, number] | undefined {
+function averageTexture(path: string): readonly [number, number, number, number] | undefined {
   const image = decodedTexture(path);
   if (image === undefined) return undefined;
   try {
@@ -189,15 +198,19 @@ function averageTexture(path: string): readonly [number, number, number] | undef
     let green = 0;
     let blue = 0;
     let weight = 0;
+    let alphaSum = 0;
     for (let pixel = 0; pixel < image.width * image.height; pixel += 1) {
       const alpha = (image.rgba[pixel * 4 + 3] ?? 0) / 255;
+      alphaSum += alpha;
       if (alpha === 0) continue;
       red += (image.rgba[pixel * 4] ?? 0) / 255 * alpha;
       green += (image.rgba[pixel * 4 + 1] ?? 0) / 255 * alpha;
       blue += (image.rgba[pixel * 4 + 2] ?? 0) / 255 * alpha;
       weight += alpha;
     }
-    return weight === 0 ? undefined : [red / weight, green / weight, blue / weight];
+    return weight === 0 ? undefined : [
+      red / weight, green / weight, blue / weight, alphaSum / (image.width * image.height),
+    ];
   } catch {
     return undefined;
   }
@@ -289,7 +302,7 @@ for (const itemId of [...acceptedItems].sort()) {
   const texturePaths = model === undefined ? [] : textureReferences(model);
   const colors = texturePaths
     .map(averageTexture)
-    .filter((value): value is readonly [number, number, number] => value !== undefined);
+    .filter((value): value is readonly [number, number, number, number] => value !== undefined);
   if (colors.length === 0) {
     missing.push(itemId);
     continue;
@@ -300,6 +313,7 @@ for (const itemId of [...acceptedItems].sort()) {
     continue;
   }
   entries.push({
+    alpha: colors.reduce((sum, color) => sum + color[3], 0) / colors.length,
     blockId,
     canonicalBlockIds: ordinaryCatalogBlocks.filter((candidate) =>
       canonicalNames(blockId).has(candidate) &&

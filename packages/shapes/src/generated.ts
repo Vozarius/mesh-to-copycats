@@ -264,6 +264,7 @@ export interface GeneratedExtractionDiagnosticMetadata {
 }
 
 export interface GeneratedCatalogSources {
+  readonly addons?: string;
   readonly copycats?: string;
   readonly create?: string;
   readonly environment?: string;
@@ -284,7 +285,7 @@ export interface GeneratedCatalogArtifacts {
 }
 
 export interface GeneratedCatalogEncodeOptions {
-  readonly evidenceMode?: 'embedded' | 'split';
+  readonly evidenceMode?: 'embedded' | 'runtime-only' | 'split';
 }
 
 export interface GeneratedRuntimePlacementProfile {
@@ -336,6 +337,10 @@ function canonicalSources(sources: GeneratedCatalogSources): GeneratedCatalogSou
   if (typeof sources !== 'object' || sources === null || Array.isArray(sources)) {
     throw new Error('sources must be an object');
   }
+  const addons = sources.addons;
+  if (addons !== undefined && (typeof addons !== 'string' || addons.length === 0 || addons.includes('\0'))) {
+    throw new Error('sources.addons must be a non-empty NUL-free string');
+  }
   const environment = sources.environment;
   if (
     environment !== undefined &&
@@ -349,6 +354,7 @@ function canonicalSources(sources: GeneratedCatalogSources): GeneratedCatalogSou
     );
   }
   return {
+    ...(addons === undefined ? {} : { addons }),
     ...(sources.minecraft === undefined ? {} : { minecraft: sources.minecraft }),
     ...(sources.loader === undefined ? {} : { loader: sources.loader }),
     ...(sources.create === undefined ? {} : { create: sources.create }),
@@ -2036,8 +2042,11 @@ export function encodeGeneratedCatalog(
   const canonicalExtraction = extraction === undefined
     ? undefined
     : canonicalExtractionMetadata(extraction, catalog.shapeCount);
+  const externalRuntimeEvidence =
+    (options.evidenceMode === 'runtime-only' || options.evidenceMode === 'split') &&
+    canonicalExtraction !== undefined;
   const splitEvidence = options.evidenceMode === 'split' && canonicalExtraction !== undefined;
-  const runtimeMetadata = splitEvidence
+  const runtimeMetadata = externalRuntimeEvidence
     ? createRuntimeMetadata(catalog, canonicalExtraction)
     : undefined;
   const auditMetadata: GeneratedExtractionAuditMetadata | undefined = splitEvidence
@@ -2074,7 +2083,7 @@ export function encodeGeneratedCatalog(
       shapes: catalog.shapeCount,
     },
     exactGeometryKinds: ['GRID16_EXACT:v1'],
-    ...(canonicalExtraction === undefined || splitEvidence
+    ...(canonicalExtraction === undefined || externalRuntimeEvidence
       ? {}
       : { extraction: canonicalExtraction }),
     formatVersion: { major: FORMAT_MAJOR, minor: FORMAT_MINOR },

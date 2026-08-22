@@ -47,6 +47,9 @@ export function parseGeneratedPalette(input: unknown): GeneratedPaletteDocument 
       typeof component !== 'number' || !Number.isFinite(component) || component < 0 || component > 1)) {
       throw new Error(`entries[${index}].srgb is invalid`);
     }
+    if (entry.alpha !== undefined && (
+      typeof entry.alpha !== 'number' || !Number.isFinite(entry.alpha) || entry.alpha < 0 || entry.alpha > 1
+    )) throw new Error(`entries[${index}].alpha is invalid`);
     const canonicalBlockIds = entry.canonicalBlockIds;
     if (canonicalBlockIds !== undefined && (
       !Array.isArray(canonicalBlockIds) || canonicalBlockIds.some((id) => typeof id !== 'string')
@@ -65,6 +68,7 @@ export function parseGeneratedPalette(input: unknown): GeneratedPaletteDocument 
       }
     }
     return {
+      ...(entry.alpha === undefined ? {} : { alpha: entry.alpha }),
       blockId: entry.blockId,
       ...(canonicalBlockIds === undefined ? {} : { canonicalBlockIds: canonicalBlockIds as string[] }),
       itemId: entry.itemId,

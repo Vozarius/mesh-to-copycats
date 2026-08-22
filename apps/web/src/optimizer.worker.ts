@@ -62,13 +62,18 @@ async function loadCatalog(): Promise<{
       return decodeNeighborTransitions(new Uint8Array(await response.arrayBuffer()));
     }),
   ])
-    .then(([runtime, palette, neighbors]) => ({
+    .then(([runtime, palette, neighbors]) => {
+      if (neighbors.shapeOffsets.length !== runtime.catalog.shapeCount + 1) {
+        throw new Error('Neighbor transitions do not match the production catalog');
+      }
+      return {
       catalog: runtime.catalog,
       neighbors,
       palette,
       runtime,
       source: 'production' as const,
-    }))
+    };
+    })
     .catch(() => ({
       catalog: getFixtureCatalog(),
       palette: createStarterMinecraftPalette(),

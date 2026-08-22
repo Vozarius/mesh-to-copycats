@@ -134,6 +134,7 @@ interface EvaluatedRealization {
   readonly partIds: number[];
   readonly safety: number;
   readonly shapeId: number;
+  readonly targetAlphas: number[];
   readonly targets: number[];
   readonly valid: boolean;
 }
@@ -173,6 +174,7 @@ function evaluateRealization(
   ownerCache: Map<number, Uint8Array>,
   sourceMaterialPaletteIndexes: Uint32Array | undefined,
   allowedPaletteIndexes: Uint8Array | undefined,
+  alphaTolerance: number,
 ): EvaluatedRealization {
   const start = catalog.shapePartOffsets[shapeId] ?? 0;
   const end = catalog.shapePartOffsets[shapeId + 1] ?? start;
@@ -189,6 +191,7 @@ function evaluateRealization(
       partIds: [],
       safety,
       shapeId,
+      targetAlphas: [],
       targets: [],
       valid: safety < 2,
     };
@@ -199,12 +202,14 @@ function evaluateRealization(
     ownerCache.set(shapeId, owner);
   }
   const sums = new Float64Array(partCount * 4);
+  const alphaSums = new Float64Array(partCount);
   const directionWeights = new Float64Array(partCount * EVIDENCE_DIRECTIONS.length);
   const lockedWeights = Array.from({ length: partCount }, () => new Map<number, number>());
   const overallLockedWeights = new Map<number, number>();
   const sampleStart = samples.cellOffsets[cell] ?? 0;
   const sampleEnd = samples.cellOffsets[cell + 1] ?? sampleStart;
   const overall = new Float64Array(4);
+  let overallAlpha = 0;
   for (let sample = sampleStart; sample < sampleEnd; sample += 1) {
     const x = Math.min(15, Math.max(0, Math.floor((samples.localPositions[sample * 3] ?? 0) * 16)));
     const y = Math.min(15, Math.max(0, Math.floor((samples.localPositions[sample * 3 + 1] ?? 0) * 16)));
@@ -220,6 +225,9 @@ function evaluateRealization(
     const weightSlot = localPart * 4 + 3;
     sums[weightSlot] = (sums[weightSlot] ?? 0) + weight;
     overall[3] = (overall[3] ?? 0) + weight;
+    const sampleAlpha = samples.alpha?.[sample] ?? 1;
+    alphaSums[localPart] = (alphaSums[localPart] ?? 0) + sampleAlpha * weight;
+    overallAlpha += sampleAlpha * weight;
     const direction = normalDirection(
       samples.normals[sample * 3] ?? 0,
       samples.normals[sample * 3 + 1] ?? 0,
@@ -237,6 +245,7 @@ function evaluateRealization(
   }
   const acceptedBlockIds: string[] = [];
   const acceptedStates: string[] = [];
+  const targetAlphas: number[] = [];
   const targets: number[] = [];
   const paletteIndexes: number[] = [];
   const materialErrors: number[] = [];
@@ -250,6 +259,7 @@ function evaluateRealization(
     const partWeight = sums[localPart * 4 + 3] ?? 0;
     const usePart = partWeight > 0;
     const weight = usePart ? partWeight : (overall[3] ?? 0) || 1;
+    const targetAlpha = (usePart ? alphaSums[localPart] ?? 0 : overallAlpha) / weight;
     const target: Oklab = [
       (usePart ? sums[localPart * 4] ?? 0 : overall[0] ?? 0) / weight,
       (usePart ? sums[localPart * 4 + 1] ?? 0 : overall[1] ?? 0) / weight,
@@ -268,6 +278,8 @@ function evaluateRealization(
       : [locked];
     for (const paletteIndex of paletteCandidates) {
       if (allowedPaletteIndexes !== undefined && allowedPaletteIndexes[paletteIndex] !== 1) continue;
+      const alphaDifference = Math.abs((palette.alpha[paletteIndex] ?? 1) - targetAlpha);
+      if (alphaDifference > alphaTolerance) continue;
       const choice = materialChoice(
         palette,
         paletteIndex,
@@ -278,7 +290,8 @@ function evaluateRealization(
         directionOrder,
       );
       if (choice === undefined) continue;
-      const error = oklabDistanceSquared(target, paletteOklab(palette, paletteIndex));
+      const error = oklabDistanceSquared(target, paletteOklab(palette, paletteIndex)) +
+        alphaDifference * alphaDifference * 0.25;
       const preference = palette.preference[paletteIndex] ?? 0;
       const bestPreference = best < palette.size ? palette.preference[best] ?? 0 : 0xffff;
       if (
@@ -293,6 +306,7 @@ function evaluateRealization(
     }
     acceptedBlockIds.push(bestChoice?.blockId ?? '');
     acceptedStates.push(bestChoice?.state ?? '');
+    targetAlphas.push(targetAlpha);
     targets.push(...target);
     paletteIndexes.push(best);
     materialErrors.push(bestError);
@@ -312,6 +326,7 @@ function evaluateRealization(
     partIds,
     safety,
     shapeId,
+    targetAlphas,
     targets,
     valid: safety < 2 && paletteIndexes.every((index) => index !== INVALID_PALETTE),
   };
@@ -341,6 +356,7 @@ function preferred(
 export function resolveMaterials(options: ResolveMaterialOptions): PackedResolvedMaterials {
   const {
     allowedPaletteIndexes,
+    alphaTolerance = 0.15,
     catalog,
     geometryIds,
     palette,
@@ -349,6 +365,9 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
     samples,
     sourceMaterialPaletteIndexes,
   } = options;
+  if (!Number.isFinite(alphaTolerance) || alphaTolerance < 0 || alphaTolerance > 1) {
+    throw new RangeError('alphaTolerance must be finite and in 0..1');
+  }
   if (samples.cellOffsets.length !== geometryIds.length + 1) {
     throw new Error('Surface sample cell count does not match geometry grid');
   }
@@ -376,6 +395,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
   const materialErrors: number[] = [];
   const materialDirections: number[] = [];
   const targetOklab: number[] = [];
+  const targetAlpha: number[] = [];
   const ownerCache = new Map<number, Uint8Array>();
   for (let cell = 0; cell < geometryIds.length; cell += 1) {
     cellPartOffsets[cell] = partIds.length;
@@ -393,6 +413,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
           ownerCache,
           sourceMaterialPaletteIndexes,
           allowedPaletteIndexes,
+          alphaTolerance,
         ),
         catalog,
         preferredByteCells?.[cell] === 1,
@@ -408,6 +429,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
     paletteIndexes.push(...best.paletteIndexes);
     materialErrors.push(...best.materialErrors);
     materialDirections.push(...best.materialDirections);
+    targetAlpha.push(...best.targetAlphas);
     targetOklab.push(...best.targets);
   }
   cellPartOffsets[geometryIds.length] = partIds.length;
@@ -422,6 +444,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
     paletteIndexes: Uint32Array.from(paletteIndexes),
     partIds: Uint8Array.from(partIds),
     shapeIds,
+    targetAlpha: Float32Array.from(targetAlpha),
     targetOklab: Float32Array.from(targetOklab),
   };
 }

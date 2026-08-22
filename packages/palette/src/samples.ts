@@ -207,6 +207,7 @@ export function extractSurfaceSamples(
   }
   const sampleColor = options.sampleLinearColor ?? defaultColorSampler(mesh);
   const cellOffsets = new Uint32Array(surface.cellCount + 1);
+  const alpha: number[] = [];
   const localPositions: number[] = [];
   const normals: number[] = [];
   const oklab: number[] = [];
@@ -251,7 +252,7 @@ export function extractSurfaceSamples(
     for (const { sample, triangle } of candidates.slice(0, maximum)) {
       const materialId = mesh.triangleMaterials[triangle] ?? 0;
       const color = sampleColor({ materialId, triangleId: triangle, u: sample.u, v: sample.v });
-      const perceptual = linearSrgbToOklab(color);
+      const perceptual = linearSrgbToOklab([color[0], color[1], color[2]]);
       localPositions.push(sample.localX, sample.localY, sample.localZ);
       normals.push(
         Math.round(sample.normalX * 127),
@@ -259,6 +260,7 @@ export function extractSurfaceSamples(
         Math.round(sample.normalZ * 127),
       );
       oklab.push(...perceptual);
+      alpha.push(Math.min(1, Math.max(0, color[3] ?? 1)));
       sourceMaterialIds.push(materialId);
       triangleIds.push(triangle);
       uvs.push(sample.u, sample.v);
@@ -267,6 +269,7 @@ export function extractSurfaceSamples(
   }
   cellOffsets[surface.cellCount] = weights.length;
   return {
+    alpha: Float32Array.from(alpha),
     cellOffsets,
     localPositions: Float32Array.from(localPositions),
     normals: Int8Array.from(normals),

@@ -1,6 +1,8 @@
 import type { Oklab, Srgb } from './color.js';
 
 export interface MaterialPaletteEntry {
+  /** Mean visible texture opacity in 0..1. Defaults to fully opaque. */
+  readonly alpha?: number;
   readonly blockId: string;
   readonly canonicalBlockIds?: readonly string[];
   readonly compatibility?: number;
@@ -10,6 +12,7 @@ export interface MaterialPaletteEntry {
 }
 
 export interface PackedMaterialPalette {
+  readonly alpha: Float32Array;
   readonly blockIds: readonly string[];
   readonly canonicalBlockIds: ReadonlyArray<readonly string[]>;
   readonly compatibility: Uint32Array;
@@ -31,9 +34,10 @@ export interface SurfaceColorSampleContext {
 
 export type SurfaceLinearColorSampler = (
   context: SurfaceColorSampleContext,
-) => readonly [red: number, green: number, blue: number];
+) => readonly [red: number, green: number, blue: number, alpha?: number];
 
 export interface PackedSurfaceSamples {
+  readonly alpha?: Float32Array;
   readonly cellOffsets: Uint32Array;
   readonly localPositions: Float32Array;
   readonly normals: Int8Array;
@@ -54,6 +58,8 @@ export interface ExtractSurfaceSamplesOptions {
 export interface ResolveMaterialOptions {
   /** One byte per palette entry; zero excludes the entry from matching. */
   readonly allowedPaletteIndexes?: Uint8Array;
+  /** Maximum absolute source/material opacity difference. Defaults to 0.15. */
+  readonly alphaTolerance?: number;
   readonly catalog: import('../../shapes/src/index.js').PackedShapeCatalog;
   readonly geometryIds: Uint32Array;
   readonly palette: PackedMaterialPalette;
@@ -77,6 +83,7 @@ export interface PackedResolvedMaterials {
   readonly partIds: Uint8Array;
   readonly shapeIds: Uint32Array;
   readonly targetOklab: Float32Array;
+  readonly targetAlpha: Float32Array;
 }
 
 export function paletteOklab(palette: PackedMaterialPalette, index: number): Oklab {

@@ -432,6 +432,23 @@ describe('extractor evidence contract', () => {
     expect(split.runtimeMetadataJson!.length).toBeLessThan(
       split.auditMetadataJson!.length,
     );
+
+    const runtimeOnly = encodeGeneratedCatalog(
+      compiled.catalog,
+      compiled.document.sources,
+      compiled.extraction,
+      { evidenceMode: 'runtime-only' },
+    );
+    expect(runtimeOnly.metadata.extraction).toBeUndefined();
+    expect(runtimeOnly.auditMetadata).toBeUndefined();
+    expect(runtimeOnly.auditMetadataJson).toBeUndefined();
+    expect(runtimeOnly.runtimeMetadata).toEqual(split.runtimeMetadata);
+    expect(() => decodeWebRuntimeCatalog({
+      blocks: runtimeOnly.blocks,
+      metadata: runtimeOnly.metadataJson,
+      runtimeMetadata: runtimeOnly.runtimeMetadataJson!,
+      shapes: runtimeOnly.shapes,
+    })).not.toThrow();
   });
 
   it('gives old version-1 inputs explicit UNEXTRACTED defaults', () => {

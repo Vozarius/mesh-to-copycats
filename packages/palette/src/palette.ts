@@ -13,6 +13,7 @@ export function createMaterialPalette(
 ): PackedMaterialPalette {
   if (entries.length === 0) throw new Error('Material palette cannot be empty');
   const seen = new Set<string>();
+  const alpha = new Float32Array(entries.length);
   const blockIds: string[] = [];
   const canonicalBlockIds: string[][] = [];
   const itemIds: string[] = [];
@@ -31,6 +32,11 @@ export function createMaterialPalette(
     blockIds.push(entry.blockId);
     canonicalBlockIds.push([...new Set([entry.blockId, ...(entry.canonicalBlockIds ?? [])])].sort());
     itemIds.push(entry.itemId);
+    const materialAlpha = entry.alpha ?? 1;
+    if (!Number.isFinite(materialAlpha) || materialAlpha < 0 || materialAlpha > 1) {
+      throw new RangeError('Material alpha must be finite and in 0..1');
+    }
+    alpha[index] = materialAlpha;
     const materialPreference = entry.preference ?? 0;
     if (!Number.isInteger(materialPreference) || materialPreference < 0 || materialPreference > 0xffff) {
       throw new RangeError(`Material preference for ${entry.itemId} must be an integer in 0..65535`);
@@ -44,6 +50,7 @@ export function createMaterialPalette(
     oklab.set(perceptual, index * 3);
   }
   return {
+    alpha,
     blockIds: Object.freeze(blockIds),
     canonicalBlockIds: Object.freeze(canonicalBlockIds.map((ids) => Object.freeze(ids))),
     compatibility,
@@ -98,6 +105,7 @@ export function filterMaterialPalette(
     if (!keep(itemId, index)) continue;
     keptIndexes.push(index);
     entries.push({
+      alpha: palette.alpha[index] ?? 1,
       blockId: palette.blockIds[index] ?? '',
       canonicalBlockIds: palette.canonicalBlockIds[index] ?? [],
       compatibility: palette.compatibility[index] ?? 0,

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@mesh-to-copycats/shapes": "workspace:*"
+    "@mesh-to-copycats/shapes": "workspace:*",
+    "stream-json": "^3.5.0"
   }
 }

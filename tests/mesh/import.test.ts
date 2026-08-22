@@ -148,7 +148,9 @@ describe('GLB importer', () => {
     expect(mesh.embeddedTextures?.[0]?.mimeType).toBe('image/png');
     const textured = decodeEmbeddedMeshTextures(mesh);
     expect(textured.textureAtlas?.widths[0]).toBe(1);
-    expect(sampleMeshMaterialLinear(textured, 1, 0.5, 0.5)).toEqual([0.25, 0, 0]);
+    expect(sampleMeshMaterialLinear(textured, 1, 0.5, 0.5)).toEqual([
+      0.25, 0, 0, 0.800000011920929,
+    ]);
   });
 
   it('decodes embedded non-interlaced RGBA PNG pixels', () => {

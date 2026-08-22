@@ -23,8 +23,8 @@ pnpm catalog:fixture -- --out generated/fixture
 pnpm catalog:compile -- --input path/to/extracted-catalog.json --out generated/catalog
 pnpm catalog:verify -- generated/catalog
 pnpm materials:verify -- generated/catalog
-pnpm palette:generate -- --catalog generated/catalog --jar minecraft-client.jar --jar create.jar --jar copycats.jar --out generated/catalog/material-palette.json
-pnpm neighbors:compile -- generated/catalog
+pnpm palette:generate -- --catalog generated/catalog --jar minecraft-client.jar --jar create.jar --jar copycats.jar --jar addon.jar --out generated/catalog/material-palette.json
+pnpm neighbors:compile -- generated/catalog --input path/to/extracted-catalog.json
 pnpm schematic:verify -- generated/catalog --out verification.nbt
 pnpm web:dev
 pnpm web:build
@@ -62,13 +62,13 @@ React/Three editor and deterministic gzip-compressed Create structure NBT export
 are integrated. Neighbour resolution, generated texture palettes and exact
 GRID16 block previews are integrated as well.
 
-A full pinned extraction has now been exercised end to end locally: 60,479
-accepted state realizations compile to 2,120 unique geometries. The browser
-catalog is 43.79 MiB shapes + 8.13 MiB blocks + 5.31 MiB runtime metadata; the
-core metadata is 584 bytes. Full controlled probe evidence remains available
-as a separate 439.60 MiB offline audit artifact. `pnpm catalog:verify` validates
-all checksums and confirms an exact optimizer selection for all 2,120 catalog
-geometries.
+A full pinned extraction with the six supported addon JARs has been exercised
+end to end locally: 137,695 accepted state realizations compile to 2,482 unique
+geometries. The browser catalog is 82.11 MiB shapes + 18.93 MiB blocks +
+16.10 MiB runtime metadata; the core metadata is 824 bytes. Full controlled
+probe evidence remains in the 1.09 GiB extractor JSON instead of being duplicated
+into browser artifacts. `pnpm catalog:verify` validates all checksums and confirms
+an exact optimizer selection for every catalog geometry.
 
 `apps/web` is the first editor surface. It imports OBJ/GLB and browser-decodable
 images locally, offers plane/circle/sphere primitives, renders the source mesh
@@ -77,8 +77,8 @@ progressively returns a packed sparse optimized grid. It extracts bounded
 per-cell surface samples, matches per-part colors in OKLab, validates Copycats
 materials against the runtime acceptance profiles, and then chooses among
 exact-equivalent realizations. Original, overlay and material-colored optimized
-views can be switched without sending the 439 MiB extraction audit to the
-browser. Valid resolved grids can be downloaded directly as `.nbt`; Copycat
+views can be switched without sending the full 1.09 GiB extraction document to
+the browser. Valid resolved grids can be downloaded directly as `.nbt`; Copycat
 block entities include exact material BlockStates, consumed ItemStacks and
 multipart storage keys required by Schematicannon material accounting.
 The pinned NeoForge runtime verifier has loaded the exported multipart NBT both
@@ -108,8 +108,8 @@ matched material quadrants on a visible face; imported images use the same path.
 Coverage-constrained fitting forbids a selected non-air realization from
 leaving a rasterized surface voxel uncovered, while the interior remains hollow.
 
-Neighbour updates are compiled from the offline extraction evidence into a
-7.01 MiB checksummed sparse binary (546,579 changed probes), rather than being
+Neighbour updates are streamed directly from the extractor JSON into a
+15.58 MiB checksummed sparse binary (1,214,004 changed probes), rather than being
 copied into JSON. The Worker applies exact `(center state, direction, neighbour
 state)` transitions with bounded coordinate descent before material
 canonicalization. Unprobed neighbour identities and multi-neighbour interactions
@@ -120,11 +120,7 @@ GLB `baseColorFactor` is retained as a linear material multiplier, matching the
 Embedded non-interlaced PNG `baseColorTexture` images are decoded into a packed
 RGBA atlas and sampled through UVs before OKLab matching. A deterministic
 resource-JAR generator resolves blockstates, inherited models, texture aliases,
-indexed PNG palettes and exact texture signatures. It also embeds a deterministic
-16×16 first-frame preview for each resolved material (759 textures / 777,216 raw
-RGBA bytes; 1.24 MB JSON). The pinned production output contains 759 of 760
-accepted material items (only `create:limestone` lacks a
-resolvable texture). External GLB images, tint-index biome colors and resource-
+indexed PNG palettes and exact texture signatures. It also embeds a deterministic 16x16 first-frame preview and mean alpha for each resolved material. Nested `META-INF/jarjar` resources are traversed for bundled addons. The pinned addon output contains 2,053 accepted material items (only `create:limestone` lacks a resolvable texture): Aeronautics 18, Create Deco 173, Railways 896, Create Big Cannons 7, Farmer's Delight 14 and TFMG 185, alongside Create and Minecraft. Transparent source samples are matched only to palette entries within the configured alpha tolerance (default 0.15). External GLB images, tint-index biome colors and resource-
 pack overrides beyond the supplied JAR order remain explicit limits. Imported
 image alpha is converted into greedy sparse rectangles before rasterization;
 the adjustable cutoff removes transparent background from geometry while

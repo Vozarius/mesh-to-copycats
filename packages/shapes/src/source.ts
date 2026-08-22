@@ -765,6 +765,7 @@ function parseShape(value: unknown, index: number): ExtractedShape {
 
 function parseSources(value: unknown): GeneratedCatalogSources {
   const source = record(value, 'sources');
+  const addons = optionalString(source.addons, 'sources.addons');
   const minecraft = optionalString(source.minecraft, 'sources.minecraft');
   const loader = optionalString(source.loader, 'sources.loader');
   const create = optionalString(source.create, 'sources.create');
@@ -780,6 +781,7 @@ function parseSources(value: unknown): GeneratedCatalogSources {
     );
   }
   return {
+    ...(addons === undefined ? {} : { addons }),
     ...(minecraft === undefined ? {} : { minecraft }),
     ...(loader === undefined ? {} : { loader }),
     ...(create === undefined ? {} : { create }),

@@ -8,7 +8,7 @@ pinned NeoForge mod -> extracted-catalog.json -> TypeScript compiler
                     -> generated-blocks.bin
                     -> metadata.json
                     -> runtime-metadata.json
-                    -> extraction-audit.json
+                    -> full extractor JSON retained as offline audit
 ```
 
 The Java mod verifies its exact loaded source pins, enumerates authoritative
@@ -19,9 +19,11 @@ sparse per-part profiles containing only candidates accepted in at least one of
 the six directions. The TypeScript compiler validates the interchange
 document, assigns deterministic dense IDs, content-addresses and deduplicates
 material profiles, builds optimizer indices, and writes versioned little-endian
-SoA artifacts, a compact browser runtime index and a separate canonical audit
-file. The web/runtime side never depends on Minecraft or mod Java classes and
-does not download raw controlled probe evidence.
+SoA artifacts plus a compact browser runtime index. Production compilation uses
+streaming JSON and omits the neighbour probe subtree from temporary in-memory
+objects; the original extractor JSON remains the complete offline audit. The
+web/runtime side never depends on Minecraft or mod Java classes and does not
+download raw controlled probe evidence.
 
 ## Compile
 
@@ -29,6 +31,7 @@ does not download raw controlled probe evidence.
 pnpm catalog:compile -- --input path/to/extracted-catalog.json --out generated/catalog
 pnpm catalog:fixture -- --out generated/fixture
 pnpm catalog:verify -- generated/catalog
+pnpm neighbors:compile -- generated/catalog --input path/to/extracted-catalog.json
 ```
 
 Both compiler commands decode and validate their output before writing it. The

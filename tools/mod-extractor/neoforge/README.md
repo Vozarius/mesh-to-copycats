@@ -14,7 +14,7 @@ deterministic TypeScript fixture until the generated artifact has been reviewed.
 | Gradle | `8.14.3` (verified; wrapper is not committed) |
 | Minecraft | `1.21.1` |
 | ModDevGradle | `2.0.107` |
-| NeoForge | `21.1.219` |
+| NeoForge | `21.1.233` |
 | Parchment | `2024.11.17` for Minecraft 1.21.1 |
 | Create | `com.simibubi.create:create-1.21.1:6.0.10-280:slim` |
 | Ponder | `net.createmod.ponder:ponder-neoforge:1.0.82+mc1.21.1` |
@@ -27,12 +27,17 @@ Modrinth Maven endpoints. Modrinth dependencies are non-transitive, so the
 Create dependency stack is declared explicitly in `build.gradle`.
 
 The runtime descriptor accepts only the pinned compatibility lines: Minecraft
-`1.21.1`, NeoForge `21.1.219` or newer, Create `6.0.x` starting at `6.0.10`,
+`1.21.1`, NeoForge `21.1.233` or newer, Create `6.0.x` starting at `6.0.10`,
 and Copycats+ `3.0.x` starting at `3.0.4`. The build itself resolves the exact
 artifact pins listed above. The extraction command is stricter than those load
 ranges: it reads the loaded versions and aborts unless they are exactly
-Minecraft `1.21.1`, NeoForge `21.1.219`, Create `6.0.10`, Copycats+
+Minecraft `1.21.1`, NeoForge `21.1.233`, Create `6.0.10`, Copycats+
 `3.0.4+mc.1.21.1-neoforge` and extractor `0.2.0`.
+
+The verified addon environment additionally pins Aeronautics Bundled 1.3.0,
+Create Deco 2.1.3, Steam 'n' Rails 0.3.0-beta, Create Big Cannons 5.11.7,
+Farmer's Delight 1.3.2 and TFMG 1.2.0, plus Ritchie's Projectile Library 2.1.2
+and Sable 2.0.1. `sources.addons` records every exact loaded addon component.
 
 ## Commands
 
@@ -62,6 +67,7 @@ from the repository root with:
 
 ```text
 pnpm catalog:compile -- --input path/to/m2c-extracted-catalog.json --out generated/catalog
+pnpm neighbors:compile -- generated/catalog --input path/to/m2c-extracted-catalog.json
 ```
 
 The development `runServer` task forwards standard input, so the extraction
@@ -90,12 +96,11 @@ and target volume are removed in `finally`, including failed runs. The verified
 production sample consumed eight Copycat Board items and eight independent part
 materials across two multipart block entities.
 
-The verified local pinned run exported 60,479 shapes with 2,812 fail-closed
-diagnostics and 67 material profiles in about 21 seconds, including the atomic
-write. TypeScript compilation produced 2,120 unique geometries, 63,704 parts,
-43.79 MiB of shape data and 8.13 MiB of block data. Its 439.60 MiB audit
-metadata is not suitable for browser delivery and must be separated from the
-5.31 MiB runtime catalog.
+The verified addon run exported 137,695 shapes from 163,813 states, with 26,199
+fail-closed diagnostics and 69 material profiles. TypeScript compilation
+produced 2,482 unique geometries and 140,356 parts, with 82.11 MiB of shape data,
+18.93 MiB of block data and 16.10 MiB of runtime metadata. The 1.09 GiB source
+JSON remains the offline audit; it is never delivered to the browser.
 
 The command sorts resource locations, states, properties and AABBs. It refuses
 any coordinate that is not exactly on the integer `0..16` lattice; it never

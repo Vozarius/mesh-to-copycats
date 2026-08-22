@@ -48,6 +48,7 @@ describe('OKLab material profiles', () => {
     expect(samples.localPositions[0]).toBeLessThan(1);
     expect(samples.oklab[1]).toBeGreaterThan(0);
     expect(samples.oklab[4]).toBeGreaterThanOrEqual(-0.1);
+    expect(Array.from(samples.alpha ?? [])).toEqual([1, 1]);
   });
 
   it('stratifies a planar UV cell into multiple texture samples', () => {
@@ -73,6 +74,7 @@ describe('generated material palette', () => {
   it('validates provenance and builds packed color arrays', () => {
     const palette = loadGeneratedMaterialPalette({
       entries: [{
+        alpha: 0.5,
         blockId: 'minecraft:stone',
         canonicalBlockIds: ['minecraft:stone_slab'],
         itemId: 'minecraft:stone',
@@ -86,6 +88,7 @@ describe('generated material palette', () => {
       version: 1,
     });
     expect(palette.size).toBe(1);
+    expect(palette.alpha[0]).toBe(0.5);
     expect(palette.itemIds).toEqual(['minecraft:stone']);
     expect(palette.canonicalBlockIds[0]).toEqual(['minecraft:stone', 'minecraft:stone_slab']);
     expect(palette.oklab).toHaveLength(3);
@@ -182,6 +185,31 @@ describe('post-material realization selection', () => {
 
     expect(resolved.invalidCells[0]).toBe(0);
     expect(Array.from(resolved.paletteIndexes).every((index) => index === 1)).toBe(true);
+  });
+
+  it('only uses a transparent material for similarly transparent source samples', () => {
+    const catalog = getFixtureCatalog();
+    const fullShape = catalog.findShapeId('fixture:full_cube', {})!;
+    const palette = createMaterialPalette([
+      { alpha: 1, blockId: 'minecraft:stone', itemId: 'minecraft:stone', srgb: [0.5, 0.5, 0.5] },
+      { alpha: 0.4, blockId: 'minecraft:tinted_glass', itemId: 'minecraft:tinted_glass', srgb: [0.5, 0.5, 0.5] },
+    ]);
+    const transparent = resolveMaterials({
+      catalog,
+      geometryIds: Uint32Array.of(catalog.shapeGeometry[fullShape]!),
+      palette,
+      samples: { ...samples, alpha: Float32Array.of(0.45) },
+    });
+    const opaque = resolveMaterials({
+      catalog,
+      geometryIds: Uint32Array.of(catalog.shapeGeometry[fullShape]!),
+      palette,
+      samples: { ...samples, alpha: Float32Array.of(1) },
+    });
+
+    expect(transparent.paletteIndexes[0]).toBe(1);
+    expect(transparent.targetAlpha[0]).toBeCloseTo(0.45);
+    expect(opaque.paletteIndexes[0]).toBe(0);
   });
 
   it('uses four independently colored Byte parts for a planar half-block target', () => {

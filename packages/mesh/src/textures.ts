@@ -263,12 +263,13 @@ export function sampleMeshMaterialLinear(
   materialId: number,
   u: number,
   v: number,
-): readonly [number, number, number] {
+): readonly [number, number, number, number] {
   const factor = mesh.materialBaseColorsLinear;
   const base = [
     factor?.[materialId * 4] ?? 0.5,
     factor?.[materialId * 4 + 1] ?? 0.5,
     factor?.[materialId * 4 + 2] ?? 0.5,
+    factor?.[materialId * 4 + 3] ?? 1,
   ] as const;
   const textureIndex = mesh.materialTextureIndexes?.[materialId] ?? -1;
   const atlas = mesh.textureAtlas;
@@ -285,5 +286,6 @@ export function sampleMeshMaterialLinear(
     base[0] * srgbToLinear((atlas.rgbaSrgb[offset] ?? 0) / 255),
     base[1] * srgbToLinear((atlas.rgbaSrgb[offset + 1] ?? 0) / 255),
     base[2] * srgbToLinear((atlas.rgbaSrgb[offset + 2] ?? 0) / 255),
+    base[3] * (atlas.rgbaSrgb[offset + 3] ?? 255) / 255,
   ];
 }

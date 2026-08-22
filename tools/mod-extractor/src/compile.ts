@@ -1,5 +1,11 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { finished } from 'node:stream/promises';
 import { resolve } from 'node:path';
+
+import parserStream from 'stream-json';
+import Assembler from 'stream-json/core/assembler.js';
+import ignore from 'stream-json/filters/ignore.js';
 
 import {
   compileExtractedCatalog,
@@ -15,7 +21,7 @@ const DEFAULT_SOURCES: GeneratedCatalogSources = {
   copycats: '3.0.4+mc.1.21.1-neoforge',
   create: '6.0.10',
   extractor: '0.2.0',
-  loader: 'neoforge-21.1.219',
+  loader: 'neoforge-21.1.233',
   minecraft: '1.21.1',
 };
 
@@ -68,18 +74,36 @@ function parseArguments(values: readonly string[]): Arguments {
   };
 }
 
+async function readLargeJson(path: string): Promise<unknown> {
+  const tokens = createReadStream(path)
+    .pipe(parserStream({
+      streamKeys: false,
+      streamNumbers: false,
+      streamStrings: false,
+    }))
+    .pipe(ignore.asStream({
+      filter: /^shapes\.\d+\.neighborDependencies$/u,
+      packKeys: true,
+      streamKeys: false,
+      streamValues: false,
+    }));
+  const assembler = Assembler.connectTo(tokens);
+  await finished(tokens);
+  return assembler.current;
+}
+
 async function generate(arguments_: Arguments): Promise<GeneratedCatalogArtifacts> {
   if (arguments_.fixture) {
     return encodeGeneratedCatalog(getFixtureCatalog(), DEFAULT_SOURCES);
   }
   const inputPath = resolve(arguments_.input!);
-  const sourceJson = await readFile(inputPath, 'utf8');
-  const compiled = compileExtractedCatalog(sourceJson);
+  const sourceDocument = await readLargeJson(inputPath);
+  const compiled = compileExtractedCatalog(sourceDocument);
   return encodeGeneratedCatalog(
     compiled.catalog,
     compiled.document.sources,
     compiled.extraction,
-    { evidenceMode: 'split' },
+    { evidenceMode: 'runtime-only' },
   );
 }
 

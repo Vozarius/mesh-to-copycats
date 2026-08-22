@@ -310,12 +310,25 @@ final class ExtractionService {
     private static Map<String, String> pinnedSources() {
         Map<String, String> sources = new LinkedHashMap<>();
         sources.put("minecraft", loadedVersion("minecraft", "1.21.1"));
-        sources.put("loader", "neoforge-" + loadedVersion("neoforge", "21.1.219"));
+        sources.put("loader", "neoforge-" + loadedVersion("neoforge", "21.1.233"));
         sources.put("create", loadedVersion("create", "6.0.10"));
         sources.put("copycats", loadedVersion(
             "copycats",
             "3.0.4+mc.1.21.1-neoforge"
         ));
+        sources.put("addons", String.join(",", List.of(
+            "aeronautics_bundled@" + loadedVersion("aeronautics_bundled", "1.3.0"),
+            "aeronautics@" + loadedVersion("aeronautics", "1.3.0"),
+            "createbigcannons@" + loadedVersion("createbigcannons", "5.11.7"),
+            "createdeco@" + loadedVersion("createdeco", "2.1.3"),
+            "farmersdelight@" + loadedVersion("farmersdelight", "1.3.2"),
+            "offroad@" + loadedVersion("offroad", "1.3.0"),
+            "railways@" + loadedVersion("railways", "0.3.0-beta+neoforge-mc1.21.1"),
+            "ritchiesprojectilelib@" + loadedVersion("ritchiesprojectilelib", "2.1.2"),
+            "sable@" + loadedVersion("sable", "2.0.1"),
+            "simulated@" + loadedVersion("simulated", "1.3.0"),
+            "tfmg@" + loadedVersion("tfmg", "1.2.0")
+        )));
         sources.put("extractor", loadedVersion(
             MeshToCopycatsExtractor.MOD_ID,
             "0.2.0"
