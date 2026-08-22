@@ -23,6 +23,7 @@ export interface WeightedScore {
 
 export interface ScoredGeometry extends WeightedScore {
   readonly geometryId: number;
+  readonly momentError: number;
 }
 
 export function quantizeWeights(missing: number, extra: number): QuantizedWeights {
@@ -114,6 +115,47 @@ export function scoreMaskAtOffset(
   };
 }
 
+interface MaskMoments {
+  readonly centerX: number;
+  readonly centerY: number;
+  readonly centerZ: number;
+  readonly varianceX: number;
+  readonly varianceY: number;
+  readonly varianceZ: number;
+}
+
+function maskMoments(mask: Uint32Array, offset: number, resolution: Resolution): MaskMoments {
+  let count = 0;
+  let sumX = 0;
+  let sumY = 0;
+  let sumZ = 0;
+  let sumX2 = 0;
+  let sumY2 = 0;
+  let sumZ2 = 0;
+  for (let z = 0; z < resolution; z += 1) {
+    for (let y = 0; y < resolution; y += 1) {
+      for (let x = 0; x < resolution; x += 1) {
+        const bit = x + resolution * (y + resolution * z);
+        if (((mask[offset + (bit >>> 5)] ?? 0) & (1 << (bit & 31))) === 0) continue;
+        count++;
+        sumX += x; sumY += y; sumZ += z;
+        sumX2 += x * x; sumY2 += y * y; sumZ2 += z * z;
+      }
+    }
+  }
+  const divisor = Math.max(1, count);
+  const centerX = sumX / divisor;
+  const centerY = sumY / divisor;
+  const centerZ = sumZ / divisor;
+  const scale = Math.max(1, resolution - 1);
+  return {
+    centerX: centerX / scale, centerY: centerY / scale, centerZ: centerZ / scale,
+    varianceX: (sumX2 / divisor - centerX * centerX) / (scale * scale),
+    varianceY: (sumY2 / divisor - centerY * centerY) / (scale * scale),
+    varianceZ: (sumZ2 / divisor - centerZ * centerZ) / (scale * scale),
+  };
+}
+
 function compareScoredGeometry(
   left: ScoredGeometry,
   right: ScoredGeometry,
@@ -121,6 +163,8 @@ function compareScoredGeometry(
 ): number {
   const scoreOrder = compareWeightedScore(left, right);
   if (scoreOrder !== 0) return scoreOrder;
+  const momentOrder = left.momentError - right.momentError;
+  if (momentOrder !== 0) return momentOrder;
   const leftShape = catalog.geometryRepresentativeShape[left.geometryId] ?? 0;
   const rightShape = catalog.geometryRepresentativeShape[right.geometryId] ?? 0;
   const familyOrder =
@@ -143,6 +187,7 @@ export function rankGeometryCandidates(
 ): ScoredGeometry[] {
   const ranked: ScoredGeometry[] = [];
   const pool = catalog.getMaskPool(resolution);
+  const targetMoments = maskMoments(target, 0, resolution);
   for (const geometryId of geometryIds) {
     const bound = ranked.length >= keep ? ranked[Math.min(keep, ranked.length) - 1] : undefined;
     const score = scoreMaskAtOffset(
@@ -154,7 +199,19 @@ export function rankGeometryCandidates(
       bound,
     );
     if (score === undefined) continue;
-    ranked.push({ ...score, geometryId });
+    const candidateMoments = maskMoments(
+      pool,
+      catalog.geometryMaskOffset(geometryId, resolution),
+      resolution,
+    );
+    const momentError =
+      (targetMoments.centerX - candidateMoments.centerX) ** 2 +
+      (targetMoments.centerY - candidateMoments.centerY) ** 2 +
+      (targetMoments.centerZ - candidateMoments.centerZ) ** 2 +
+      ((targetMoments.varianceX - candidateMoments.varianceX) ** 2 +
+        (targetMoments.varianceY - candidateMoments.varianceY) ** 2 +
+        (targetMoments.varianceZ - candidateMoments.varianceZ) ** 2) * 0.25;
+    ranked.push({ ...score, geometryId, momentError });
     ranked.sort((left, right) => compareScoredGeometry(left, right, catalog));
     if (ranked.length > keep) {
       const cutoff = ranked[keep - 1]!;

@@ -433,6 +433,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
   const targetAlpha: number[] = [];
   const ownerCache = new Map<number, Uint8Array>();
   const choiceCache = new Map<string, readonly CachedMaterialChoice[]>();
+  const fallbackChoiceCache = new Map<string, readonly CachedMaterialChoice[]>();
   for (let cell = 0; cell < geometryIds.length; cell += 1) {
     cellPartOffsets[cell] = partIds.length;
     let best: EvaluatedRealization | undefined;
@@ -457,6 +458,33 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
       );
     }
     if (best === undefined) throw new Error(`Geometry ${geometryIds[cell]} has no realizations`);
+    if (!best.valid && allowedPaletteIndexes !== undefined) {
+      // Include Materials is a strong preference, not a reason to make the schematic
+      // impossible to export. Retry against the full palette while retaining Copycats
+      // acceptance, alpha matching and placement-safety validation.
+      let fallback: EvaluatedRealization | undefined;
+      for (const shapeId of catalog.getRealizationShapeIds(geometryIds[cell] ?? 0)) {
+        fallback = preferred(
+          fallback,
+          evaluateRealization(
+            catalog,
+            runtime,
+            palette,
+            samples,
+            cell,
+            shapeId,
+            ownerCache,
+            undefined,
+            undefined,
+            fallbackChoiceCache,
+            alphaTolerance,
+          ),
+          catalog,
+          preferredByteCells?.[cell] === 1,
+        );
+      }
+      if (fallback?.valid === true) best = fallback;
+    }
     shapeIds[cell] = best.shapeId;
     invalidCells[cell] = best.valid ? 0 : 1;
     cellErrors[cell] = best.error;

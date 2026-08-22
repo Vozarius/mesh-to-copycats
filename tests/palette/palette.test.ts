@@ -187,6 +187,26 @@ describe('post-material realization selection', () => {
     expect(Array.from(resolved.paletteIndexes).every((index) => index === 1)).toBe(true);
   });
 
+  it('falls back to the nearest compatible full-palette material when includes resolve none', () => {
+    const catalog = getFixtureCatalog();
+    const fullShape = catalog.findShapeId('fixture:full_cube', {})!;
+    const palette = createMaterialPalette([
+      { blockId: 'minecraft:stone', itemId: 'minecraft:stone', srgb: [0.5, 0.5, 0.5] },
+      { blockId: 'minecraft:red_concrete', itemId: 'minecraft:red_concrete', srgb: [0.8, 0.1, 0.1] },
+    ]);
+    const resolved = resolveMaterials({
+      allowedPaletteIndexes: Uint8Array.of(0, 0),
+      catalog,
+      geometryIds: Uint32Array.of(catalog.shapeGeometry[fullShape]!),
+      palette,
+      samples,
+    });
+
+    expect(resolved.invalidCells[0]).toBe(0);
+    expect(resolved.paletteIndexes[0]).toBe(0);
+    expect(resolved.acceptedMaterialBlockIds[0]).toBe('minecraft:stone');
+  });
+
   it('only uses a transparent material for similarly transparent source samples', () => {
     const catalog = getFixtureCatalog();
     const fullShape = catalog.findShapeId('fixture:full_cube', {})!;

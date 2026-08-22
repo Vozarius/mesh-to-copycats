@@ -77,4 +77,27 @@ describe('sparse optimization pipeline', () => {
     expect(Array.from(catalog.getRealizationShapeIds(result.geometryIds[0] ?? 0))
       .map((shapeId) => catalog.blockIds[shapeId])).not.toContain('fixture:copycat_byte');
   });
+
+  it('expands an imported image plane to independently materialized Byte octants', () => {
+    const catalog = getFixtureCatalog();
+    const mesh = finalizeMesh({
+      indices: [0, 1, 2, 0, 2, 3],
+      materialNames: ['image'],
+      positions: [0.1, 0.1, 0.25, 0.9, 0.1, 0.25, 0.9, 0.9, 0.25, 0.1, 0.9, 0.25],
+      texcoords: [0, 0, 1, 0, 1, 1, 0, 1],
+      triangleMaterials: [0, 0],
+    });
+    const result = optimizeMesh({
+      catalog,
+      expandPlanarImageOctants: true,
+      mesh,
+      optimizerSettings: { extraWeight: 1, missingWeight: 1 },
+      preferPlanarByteGeometry: true,
+    });
+
+    expect(result.planarBytePreferred[0]).toBe(1);
+    expect(result.missingCounts[0]).toBe(0);
+    expect(Array.from(catalog.getRealizationShapeIds(result.geometryIds[0] ?? 0))
+      .map((shapeId) => catalog.blockIds[shapeId])).toContain('fixture:copycat_byte');
+  });
 });

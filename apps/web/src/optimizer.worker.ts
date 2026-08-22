@@ -11,6 +11,11 @@ import {
   type WebRuntimeCatalog,
 } from '@mesh-to-copycats/shapes';
 import { QualityMode } from '@mesh-to-copycats/shared';
+import {
+  createSparseCellOccupancy,
+  createSparseCellOctantOccupancy,
+  popcount32,
+} from '../../../packages/voxelizer/src/index.js';
 
 import {
   createStarterMinecraftPalette,
@@ -219,6 +224,7 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
       const result = await optimizeMeshProgressive({
         batchSize: 512,
         catalog: loaded.catalog,
+        expandPlanarImageOctants: request.highDetailImagePlane,
         mesh: request.mesh,
         onProgress: ({ completed, total }) => {
           scope.postMessage({
@@ -230,20 +236,15 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         },
         optimizerSettings: {
           extraWeight: 1,
-          missingWeight: 1024,
+          // Missing surface voxels are visible holes. Keep this finite so a slightly
+          // smaller closed form can still beat a grossly oversized outer approximation.
+          missingWeight: 16,
           qualityMode: qualityMode(request.quality),
         },
         preferPlanarByteGeometry: true,
         rasterizer: { scale: request.scale },
         signal: abort,
       });
-      const uncoveredCells = result.missingCounts.reduce(
-        (count, missing) => count + (missing > 0 ? 1 : 0),
-        0,
-      );
-      if (uncoveredCells > 0) {
-        throw new Error(`Surface coverage invariant failed for ${uncoveredCells} cells`);
-      }
       const palette = loaded.palette;
       const included = request.includedMaterialItemIds === undefined
         ? undefined
@@ -278,6 +279,29 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
             surface: result.surface,
             transitions: loaded.neighbors,
           });
+      // Extracted neighbour-dependent states are authoritative Minecraft behavior, but
+      // their alternate outline must never open more of the source surface than the
+      // geometry selected by the optimizer. Reject only coverage-regressing transitions.
+      for (let cell = 0; cell < neighbors.geometryIds.length; cell += 1) {
+        const geometryId = neighbors.geometryIds[cell] ?? 0;
+        if (geometryId === result.geometryIds[cell]) continue;
+        const occupancy = request.highDetailImagePlane
+          ? createSparseCellOctantOccupancy(request.mesh, result.surface, cell)
+          : createSparseCellOccupancy(request.mesh, result.surface, cell);
+        const target = occupancy.getMask(16);
+        const candidate = loaded.catalog.getGeometryMask(geometryId, 16);
+        let missing = 0;
+        for (let word = 0; word < target.length; word += 1) {
+          missing += popcount32((target[word] ?? 0) & ~(candidate[word] ?? 0));
+        }
+        if (missing <= (result.missingCounts[cell] ?? 0)) continue;
+        neighbors.geometryIds[cell] = result.geometryIds[cell] ?? 0;
+        neighbors.shapeIds[cell] = result.shapeIds[cell] ?? 0;
+      }
+      const acceptedNeighborChangedCells = neighbors.shapeIds.reduce(
+        (count, shapeId, cell) => count + (shapeId === result.shapeIds[cell] ? 0 : 1),
+        0,
+      );
       const neighborMs = performance.now() - neighborStarted;
       const materialStarted = performance.now();
       const samples = extractSurfaceSamples(request.mesh, result.surface, { strataPerAxis: 2 });
@@ -324,7 +348,7 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         cellZ: result.surface.cellZ,
         errors: result.geometryErrors,
         invalidMaterialCells: materials.invalidCells.reduce((sum, value) => sum + value, 0),
-        neighborChangedCells: neighbors.changedCells,
+        neighborChangedCells: acceptedNeighborChangedCells,
         neighborIterations: neighbors.iterations,
         materialErrors: materials.materialErrors,
         materialDirections: materials.materialDirections,

@@ -3,6 +3,8 @@ import type { PackedTriangleMesh } from '@mesh-to-copycats/mesh';
 export type QualityName = 'BALANCED' | 'FAST' | 'QUALITY';
 
 export interface OptimizeRequest {
+  /** Imported images deliberately use independently colored Byte octants. */
+  readonly highDetailImagePlane: boolean;
   readonly includedMaterialItemIds?: readonly string[];
   readonly materialOverrides: readonly string[];
   readonly mesh: PackedTriangleMesh;

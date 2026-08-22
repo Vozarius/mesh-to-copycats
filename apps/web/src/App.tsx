@@ -123,8 +123,9 @@ const IDENTITY_TRANSFORM: ModelTransformState = {
 
 export function App() {
   const [mesh, setMesh] = useState<PackedTriangleMesh>(() => demoMesh());
+  const [imagePlane, setImagePlane] = useState(false);
   const [filename, setFilename] = useState('demo-taper.glb');
-  const [quality, setQuality] = useState<QualityName>('BALANCED');
+  const [quality, setQuality] = useState<QualityName>('QUALITY');
   const [scale, setScale] = useState(1);
   const [view, setView] = useState<'optimized' | 'original' | 'split'>('original');
   const [progress, setProgress] = useState({ completed: 0, total: 0 });
@@ -195,12 +196,13 @@ export function App() {
     };
   }, []);
 
-  const selectMesh = (nextMesh: PackedTriangleMesh, name: string) => {
+  const selectMesh = (nextMesh: PackedTriangleMesh, name: string, isImagePlane = false) => {
     if (status === 'running' && worker.current !== undefined) {
       worker.current.postMessage({ requestId: request.current, type: 'cancel' } satisfies WorkerRequest);
       request.current += 1;
     }
     setMesh(nextMesh);
+    setImagePlane(isImagePlane);
     setFilename(name);
     setResult(undefined);
     setStatus('idle');
@@ -270,7 +272,7 @@ export function App() {
           ? await importImageAsPlane(file, imageAlphaThreshold)
           : undefined;
     if (imported === undefined) throw new Error('Choose an OBJ, GLB or image file');
-    selectMesh(imported, file.name);
+    selectMesh(imported, file.name, file.type.startsWith('image/'));
   };
 
   const importUvTexture = async (file: File) => {
@@ -350,6 +352,7 @@ export function App() {
       ...(includedMaterials === undefined
         ? {}
         : { includedMaterialItemIds: [...includedMaterials].sort() }),
+      highDetailImagePlane: imagePlane,
       materialOverrides,
       mesh: workerMesh,
       quality,

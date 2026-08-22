@@ -7,6 +7,7 @@ import {
 import type { PackedShapeCatalog } from '../../shapes/src/index.js';
 import {
   createSparseCellOccupancy,
+  createSparseCellOctantOccupancy,
   getSparseCellSurfaceStatistics,
   maskToHex,
   popcountMask,
@@ -23,6 +24,8 @@ export interface SparsePipelineProgress {
 export interface OptimizeMeshOptions {
   readonly batchSize?: number;
   readonly catalog: PackedShapeCatalog;
+  /** Expands planar image cells to independently materialized Byte octants. */
+  readonly expandPlanarImageOctants?: boolean;
   readonly mesh: PackedTriangleMesh;
   readonly onProgress?: (progress: SparsePipelineProgress) => void;
   readonly optimizerSettings?: Partial<OptimizerSettings>;
@@ -160,11 +163,15 @@ function optimizeBatchRange(
   const pendingKeys: string[] = [];
   const pendingCells = new Map<string, number[]>();
   for (let cell = start; cell < end; cell += 1) {
-    const occupancy = createSparseCellOccupancy(options.mesh, state.surface, cell);
+    const sourceOccupancy = createSparseCellOccupancy(options.mesh, state.surface, cell);
+    const planar = getSparseCellSurfaceStatistics(options.mesh, state.surface, cell).normalVariance <=
+      (options.planarNormalVarianceThreshold ?? 0.025);
+    const occupancy = options.expandPlanarImageOctants === true && planar
+      ? createSparseCellOctantOccupancy(options.mesh, state.surface, cell)
+      : sourceOccupancy;
     const mask16 = occupancy.getMask(16);
     const preferByte = options.preferPlanarByteGeometry === true &&
-      getSparseCellSurfaceStatistics(options.mesh, state.surface, cell).normalVariance <=
-        (options.planarNormalVarianceThreshold ?? 0.025) &&
+      planar &&
       isExactOctantUnion(occupancy);
     state.planarBytePreferred[cell] = preferByte ? 1 : 0;
     const visible = popcountMask(mask16) > 0;
@@ -184,6 +191,7 @@ function optimizeBatchRange(
     pendingInputs.push({
       excludeAir: visible,
       occupancy,
+      // A shell may be hollow, but every rasterized surface microvoxel must stay covered.
       requireCoverage: visible,
     });
   }
