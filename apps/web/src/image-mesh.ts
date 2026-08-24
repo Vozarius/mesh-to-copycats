@@ -59,7 +59,11 @@ export async function decodeEmbeddedMeshTexturesBrowser(
       : appendTextureAtlas(textureAtlas, wrapped);
   }
   if (textureAtlas === undefined) return mesh;
-  return { ...mesh, textureAtlas };
+  // The decoded atlas replaces the compressed GLB payload. Keeping both can
+  // temporarily double texture memory when a second model is imported.
+  const { embeddedTextures, ...decodedMesh } = mesh;
+  void embeddedTextures;
+  return { ...decodedMesh, textureAtlas };
 }
 
 export async function importImageAsPlane(file: File, alphaThreshold = 1): Promise<PackedTriangleMesh> {

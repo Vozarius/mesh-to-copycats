@@ -17,6 +17,19 @@ import {
 } from './types.js';
 
 const INVALID_PALETTE = 0xffff_ffff;
+const OWNER_CACHE_LIMIT = 2_048;
+const CHOICE_CACHE_LIMIT = 128;
+
+function boundedCacheSet<K, V>(cache: Map<K, V>, key: K, value: V, limit: number): void {
+  if (cache.has(key)) cache.delete(key);
+  while (cache.size >= limit) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+  cache.set(key, value);
+}
+
 const profileResultIndexes = new WeakMap<
   GeneratedMaterialAcceptanceProfileMetadata,
   ReadonlyMap<string, GeneratedMaterialAcceptanceProfileMetadata['results'][number]>
@@ -36,6 +49,33 @@ function materialResult(
 
 function isCopycat(blockId: string): boolean {
   return blockId.startsWith('copycats:') || blockId.includes(':copycat_');
+}
+
+const materialProfileCacheIds = new WeakMap<GeneratedMaterialAcceptanceProfileMetadata, number>();
+let nextMaterialProfileCacheId = 1;
+
+function materialChoiceCacheKey(
+  compatibility: number,
+  blockId: string,
+  shapeState: string,
+  profile: GeneratedMaterialAcceptanceProfileMetadata | undefined,
+  directionOrder: readonly number[],
+): string {
+  const directions = directionOrder.join('');
+  if (profile?.status === 'SUPPORTED' && profile.coverage === 'COMPLETE_REGISTRY') {
+    let profileId = materialProfileCacheIds.get(profile);
+    if (profileId === undefined) {
+      profileId = nextMaterialProfileCacheId++;
+      materialProfileCacheIds.set(profile, profileId);
+    }
+    return `${compatibility}:profile:${profileId}:${directions}`;
+  }
+  if (isCopycat(blockId)) {
+    return profile === undefined
+      ? `${compatibility}:copycat:generic:${directions}`
+      : 'copycat:unsupported';
+  }
+  return `${compatibility}:ordinary:${blockId}:${shapeState}:${directions}`;
 }
 
 interface MaterialChoice {
@@ -168,6 +208,195 @@ function placementRank(runtime: WebRuntimeCatalog | undefined, shapeId: number):
   return 2;
 }
 
+interface GeometryRealizationIndex {
+  readonly directShapeIds: readonly number[];
+  readonly ordinaryByBlockId: ReadonlyMap<string, {
+    readonly any: number;
+    readonly safe?: number;
+  }>;
+}
+
+function betterShape(
+  catalog: PackedShapeCatalog,
+  runtime: WebRuntimeCatalog | undefined,
+  left: number,
+  right: number,
+): number {
+  const placementOrder = placementRank(runtime, left) - placementRank(runtime, right);
+  if (placementOrder !== 0) return placementOrder < 0 ? left : right;
+  const complexityOrder =
+    (catalog.shapeComplexity[left] ?? 0) - (catalog.shapeComplexity[right] ?? 0);
+  if (complexityOrder !== 0) return complexityOrder < 0 ? left : right;
+  return Math.min(left, right);
+}
+
+function indexGeometryRealizations(
+  catalog: PackedShapeCatalog,
+  runtime: WebRuntimeCatalog | undefined,
+  geometryId: number,
+  allowedShapeIds: Uint8Array | undefined,
+): GeometryRealizationIndex {
+  const directShapeIds: number[] = [];
+  const ordinaryByBlockId = new Map<string, { any: number; safe?: number }>();
+  for (const shapeId of catalog.getRealizationShapeIds(geometryId)) {
+    if (allowedShapeIds !== undefined && allowedShapeIds[shapeId] !== 1) continue;
+    const start = catalog.shapePartOffsets[shapeId] ?? 0;
+    const end = catalog.shapePartOffsets[shapeId + 1] ?? start;
+    const blockId = catalog.blockIds[shapeId] ?? '';
+    if (isCopycat(blockId) || end - start !== 1) {
+      directShapeIds.push(shapeId);
+      continue;
+    }
+    const previous = ordinaryByBlockId.get(blockId);
+    const any = previous === undefined
+      ? shapeId
+      : betterShape(catalog, runtime, previous.any, shapeId);
+    const safeCandidate = placementRank(runtime, shapeId) < 2 ? shapeId : undefined;
+    const safe = safeCandidate === undefined
+      ? previous?.safe
+      : previous?.safe === undefined
+        ? safeCandidate
+        : betterShape(catalog, runtime, previous.safe, safeCandidate);
+    ordinaryByBlockId.set(blockId, {
+      any,
+      ...(safe === undefined ? {} : { safe }),
+    });
+  }
+  return { directShapeIds, ordinaryByBlockId };
+}
+
+interface CellMaterialTarget {
+  readonly alpha: number;
+  readonly directionOrder: readonly number[];
+  readonly locked?: number;
+  readonly oklab: Oklab;
+}
+
+function cellMaterialTarget(
+  samples: PackedSurfaceSamples,
+  cell: number,
+  sourceMaterialPaletteIndexes: Uint32Array | undefined,
+): CellMaterialTarget {
+  const sums = new Float64Array(3);
+  const directionWeights = new Float64Array(EVIDENCE_DIRECTIONS.length);
+  const lockedWeights = new Map<number, number>();
+  const start = samples.cellOffsets[cell] ?? 0;
+  const end = samples.cellOffsets[cell + 1] ?? start;
+  let alphaSum = 0;
+  let totalWeight = 0;
+  for (let sample = start; sample < end; sample += 1) {
+    const weight = samples.weights[sample] ?? 0;
+    totalWeight += weight;
+    alphaSum += (samples.alpha?.[sample] ?? 1) * weight;
+    for (let channel = 0; channel < 3; channel += 1) {
+      sums[channel] = (sums[channel] ?? 0) +
+        (samples.oklab[sample * 3 + channel] ?? 0) * weight;
+    }
+    const direction = normalDirection(
+      samples.normals[sample * 3] ?? 0,
+      samples.normals[sample * 3 + 1] ?? 0,
+      samples.normals[sample * 3 + 2] ?? 0,
+    );
+    directionWeights[direction] = (directionWeights[direction] ?? 0) + weight;
+    const sourceMaterial = samples.sourceMaterialIds[sample] ?? INVALID_PALETTE;
+    const locked = sourceMaterialPaletteIndexes?.[sourceMaterial] ?? INVALID_PALETTE;
+    if (locked !== INVALID_PALETTE) {
+      lockedWeights.set(locked, (lockedWeights.get(locked) ?? 0) + weight);
+    }
+  }
+  const divisor = totalWeight || 1;
+  let locked: number | undefined;
+  let lockedWeight = Number.NEGATIVE_INFINITY;
+  for (const [paletteIndex, weight] of lockedWeights) {
+    if (weight > lockedWeight || (weight === lockedWeight && paletteIndex < (locked ?? INVALID_PALETTE))) {
+      locked = paletteIndex;
+      lockedWeight = weight;
+    }
+  }
+  return {
+    alpha: alphaSum / divisor,
+    directionOrder: Array.from({ length: EVIDENCE_DIRECTIONS.length }, (_value, index) => index)
+      .sort((left, right) =>
+        (directionWeights[right] ?? 0) - (directionWeights[left] ?? 0) || left - right),
+    ...(locked === undefined ? {} : { locked }),
+    oklab: [
+      (sums[0] ?? 0) / divisor,
+      (sums[1] ?? 0) / divisor,
+      (sums[2] ?? 0) / divisor,
+    ],
+  };
+}
+
+function evaluateOrdinaryRealizations(
+  catalog: PackedShapeCatalog,
+  runtime: WebRuntimeCatalog | undefined,
+  palette: PackedMaterialPalette,
+  target: CellMaterialTarget,
+  index: GeometryRealizationIndex,
+  allowedPaletteIndexes: Uint8Array | undefined,
+  alphaTolerance: number,
+  relaxConstraints: boolean,
+): EvaluatedRealization | undefined {
+  let bestError = Number.POSITIVE_INFINITY;
+  let bestPalette = INVALID_PALETTE;
+  let bestShape: number | undefined;
+  for (let paletteIndex = 0; paletteIndex < palette.size; paletteIndex += 1) {
+    if (target.locked !== undefined && paletteIndex !== target.locked) continue;
+    if (allowedPaletteIndexes !== undefined && allowedPaletteIndexes[paletteIndex] !== 1) continue;
+    const alphaDifference = Math.abs((palette.alpha[paletteIndex] ?? 1) - target.alpha);
+    if (!relaxConstraints && alphaDifference > alphaTolerance) continue;
+    let shapeId: number | undefined;
+    for (const blockId of palette.canonicalBlockIds[paletteIndex] ?? []) {
+      const shapes = index.ordinaryByBlockId.get(blockId);
+      const candidate = relaxConstraints ? shapes?.any : shapes?.safe;
+      if (candidate === undefined) continue;
+      const part = catalog.shapePartOffsets[candidate] ?? 0;
+      const compatibility = catalog.partCompatibility[part] ?? 0xffff_ffff;
+      if (((palette.compatibility[paletteIndex] ?? 0) & compatibility) === 0) continue;
+      shapeId = shapeId === undefined
+        ? candidate
+        : betterShape(catalog, runtime, shapeId, candidate);
+    }
+    if (shapeId === undefined) continue;
+    const error = oklabDistanceSquared(target.oklab, paletteOklab(palette, paletteIndex)) +
+      alphaDifference * alphaDifference * 0.25;
+    const preference = palette.preference[paletteIndex] ?? 0;
+    const bestPreference = bestPalette < palette.size
+      ? palette.preference[bestPalette] ?? 0
+      : 0xffff;
+    if (
+      error < bestError ||
+      (error === bestError && (
+        preference < bestPreference ||
+        (preference === bestPreference && (
+          paletteIndex < bestPalette ||
+          (paletteIndex === bestPalette && shapeId < (bestShape ?? Number.MAX_SAFE_INTEGER))
+        ))
+      ))
+    ) {
+      bestError = error;
+      bestPalette = paletteIndex;
+      bestShape = shapeId;
+    }
+  }
+  if (bestShape === undefined || bestPalette === INVALID_PALETTE) return undefined;
+  const part = catalog.shapePartOffsets[bestShape] ?? 0;
+  return {
+    acceptedBlockIds: [catalog.blockIds[bestShape] ?? ''],
+    acceptedStates: [catalog.states[bestShape] ?? ''],
+    error: bestError,
+    materialErrors: [bestError],
+    materialDirections: [target.directionOrder[0] ?? 0],
+    paletteIndexes: [bestPalette],
+    partIds: [catalog.partIds[part] ?? 0],
+    safety: placementRank(runtime, bestShape),
+    shapeId: bestShape,
+    targetAlphas: [target.alpha],
+    targets: [...target.oklab],
+    valid: true,
+  };
+}
+
 function evaluateRealization(
   catalog: PackedShapeCatalog,
   runtime: WebRuntimeCatalog | undefined,
@@ -205,7 +434,7 @@ function evaluateRealization(
   let owner = ownerCache.get(shapeId);
   if (owner === undefined) {
     owner = nearestOwnerGrid(catalog, shapeId);
-    ownerCache.set(shapeId, owner);
+    boundedCacheSet(ownerCache, shapeId, owner, OWNER_CACHE_LIMIT);
   }
   const sums = new Float64Array(partCount * 4);
   const alphaSums = new Float64Array(partCount);
@@ -309,10 +538,12 @@ function evaluateRealization(
           );
       choices = choice === undefined ? [] : [{ ...choice, paletteIndex: locked }];
     } else {
-      const cacheKey = `${shapeId}:${localPart}:${directionOrder.join('')}`;
+      const cacheKey = materialChoiceCacheKey(compatibility, blockId, shapeState, profile, directionOrder);
       const cached = choiceCache.get(cacheKey);
-      if (cached !== undefined) choices = cached;
-      else {
+      if (cached !== undefined) {
+        boundedCacheSet(choiceCache, cacheKey, cached, CHOICE_CACHE_LIMIT);
+        choices = cached;
+      } else {
         const built: CachedMaterialChoice[] = [];
         for (let paletteIndex = 0; paletteIndex < palette.size; paletteIndex += 1) {
           if (allowedPaletteIndexes !== undefined && allowedPaletteIndexes[paletteIndex] !== 1) {
@@ -330,7 +561,7 @@ function evaluateRealization(
           if (choice !== undefined) built.push({ ...choice, paletteIndex });
         }
         choices = built;
-        choiceCache.set(cacheKey, choices);
+        boundedCacheSet(choiceCache, cacheKey, choices, CHOICE_CACHE_LIMIT);
       }
     }
     for (const choice of choices) {
@@ -451,8 +682,20 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
   const ownerCache = new Map<number, Uint8Array>();
   const choiceCache = new Map<string, readonly CachedMaterialChoice[]>();
   const fallbackChoiceCache = new Map<string, readonly CachedMaterialChoice[]>();
+  const realizationIndexes = new Map<number, GeometryRealizationIndex>();
   for (let cell = 0; cell < geometryIds.length; cell += 1) {
     cellPartOffsets[cell] = partIds.length;
+    const geometryId = geometryIds[cell] ?? 0;
+    let realizationIndex = realizationIndexes.get(geometryId);
+    if (realizationIndex === undefined) {
+      realizationIndex = indexGeometryRealizations(
+        catalog,
+        runtime,
+        geometryId,
+        allowedShapeIds,
+      );
+      realizationIndexes.set(geometryId, realizationIndex);
+    }
     const choose = (
       candidateSourceMaterialPaletteIndexes: Uint32Array | undefined,
       candidateAllowedPaletteIndexes: Uint8Array | undefined,
@@ -460,8 +703,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
       relaxConstraints: boolean,
     ): EvaluatedRealization | undefined => {
       let selected: EvaluatedRealization | undefined;
-      for (const shapeId of catalog.getRealizationShapeIds(geometryIds[cell] ?? 0)) {
-        if (allowedShapeIds !== undefined && allowedShapeIds[shapeId] !== 1) continue;
+      for (const shapeId of realizationIndex.directShapeIds) {
         selected = preferred(
           selected,
           evaluateRealization(
@@ -478,6 +720,24 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
             alphaTolerance,
             relaxConstraints,
           ),
+          catalog,
+          preferredByteCells?.[cell] === 1,
+        );
+      }
+      const ordinary = evaluateOrdinaryRealizations(
+        catalog,
+        runtime,
+        palette,
+        cellMaterialTarget(samples, cell, candidateSourceMaterialPaletteIndexes),
+        realizationIndex,
+        candidateAllowedPaletteIndexes,
+        alphaTolerance,
+        relaxConstraints,
+      );
+      if (ordinary !== undefined) {
+        selected = preferred(
+          selected,
+          ordinary,
           catalog,
           preferredByteCells?.[cell] === 1,
         );

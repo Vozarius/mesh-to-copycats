@@ -51,7 +51,9 @@ function settingsWithDefaults(
     settings.keepAfter8 < 1 ||
     settings.maxGeneratedCandidates < settings.keepAfter4 ||
     settings.maxGenericCandidates < 1 ||
-    settings.alternatives < 0
+    settings.alternatives < 0 ||
+    !Number.isFinite(settings.boundaryWeight) ||
+    settings.boundaryWeight < 0 || settings.boundaryWeight > 4
   ) {
     throw new RangeError('Invalid optimizer candidate limits');
   }
@@ -199,6 +201,96 @@ function allowedCanonicalGeometryIds(
   return selected;
 }
 
+const octantPatternCaches = new WeakMap<PackedShapeCatalog, Int16Array>();
+
+function geometryOctantPattern(
+  catalog: PackedShapeCatalog,
+  geometryId: number,
+): number | undefined {
+  let cache = octantPatternCaches.get(catalog);
+  if (cache === undefined) {
+    cache = new Int16Array(catalog.geometryCount);
+    cache.fill(-2);
+    octantPatternCaches.set(catalog, cache);
+  }
+  const cached = cache[geometryId] ?? -1;
+  if (cached !== -2) return cached < 0 ? undefined : cached;
+  const mask = catalog.getGeometryMask(geometryId, 16);
+  let pattern = 0;
+  for (let octant = 0; octant < 8; octant += 1) {
+    const startX = (octant & 1) === 0 ? 0 : 8;
+    const startY = (octant & 2) === 0 ? 0 : 8;
+    const startZ = (octant & 4) === 0 ? 0 : 8;
+    let state = -1;
+    for (let z = startZ; z < startZ + 8; z += 1) {
+      for (let y = startY; y < startY + 8; y += 1) {
+        for (let x = startX; x < startX + 8; x += 1) {
+          const bit = x + 16 * (y + 16 * z);
+          const occupied = ((mask[bit >>> 5] ?? 0) & (1 << (bit & 31))) === 0 ? 0 : 1;
+          if (state === -1) state = occupied;
+          else if (state !== occupied) {
+            cache[geometryId] = -1;
+            return undefined;
+          }
+        }
+      }
+    }
+    if (state === 1) pattern |= 1 << octant;
+  }
+  cache[geometryId] = pattern;
+  return pattern;
+}
+
+function conservativeOctantPattern(mask: Uint32Array): number {
+  let pattern = 0;
+  for (let z = 0; z < 16; z += 1) {
+    for (let y = 0; y < 16; y += 1) {
+      for (let x = 0; x < 16; x += 1) {
+        const bit = x + 16 * (y + 16 * z);
+        if (((mask[bit >>> 5] ?? 0) & (1 << (bit & 31))) === 0) continue;
+        pattern |= 1 << ((x >= 8 ? 1 : 0) | (y >= 8 ? 2 : 0) | (z >= 8 ? 4 : 0));
+      }
+    }
+  }
+  return pattern;
+}
+
+function popcount8(value: number): number {
+  let result = value & 0xff;
+  result = result - ((result >>> 1) & 0x55);
+  result = (result & 0x33) + ((result >>> 2) & 0x33);
+  return ((result + (result >>> 4)) & 0x0f);
+}
+
+function narrowOctantLatticeCandidates(
+  geometryIds: readonly number[],
+  targetMask16: () => Uint32Array,
+  catalog: PackedShapeCatalog,
+  weights: ReturnType<typeof quantizeWeights>,
+): number[] | undefined {
+  const patterns: number[] = [];
+  for (const geometryId of geometryIds) {
+    const pattern = geometryOctantPattern(catalog, geometryId);
+    if (pattern === undefined) return undefined;
+    patterns.push(pattern);
+  }
+  const target = conservativeOctantPattern(targetMask16());
+  let bestScore = Number.POSITIVE_INFINITY;
+  const selected: number[] = [];
+  for (let index = 0; index < geometryIds.length; index += 1) {
+    const pattern = patterns[index] ?? 0;
+    const score = popcount8(target & ~pattern) * weights.missing +
+      popcount8(pattern & ~target) * weights.extra;
+    if (score > bestScore) continue;
+    if (score < bestScore) {
+      bestScore = score;
+      selected.length = 0;
+    }
+    selected.push(geometryIds[index]!);
+  }
+  return selected;
+}
+
 function generateCanonicalCandidates(
   mask4: Uint32Array,
   descriptor: Float32Array,
@@ -285,6 +377,18 @@ export class GeometryOptimizer {
           return (this.catalog.shapeFamily[shapeId] ?? 0) !== 0;
         });
     }
+    if (input.allowedGeometryIds !== undefined) {
+      const latticeCandidates = narrowOctantLatticeCandidates(
+        generatedGeometryIds,
+        () => reflectMask(input.occupancy.getMask(16), 16, transform),
+        this.catalog,
+        weights,
+      );
+      if (latticeCandidates !== undefined) {
+        generatedGeometryIds = latticeCandidates;
+        refinementReasons.push('octant-lattice-direct');
+      }
+    }
     if (input.requireCoverage === true) {
       generatedGeometryIds = requiredCoverageCandidates(
         generatedGeometryIds,
@@ -307,6 +411,7 @@ export class GeometryOptimizer {
       settings.keepAfter4,
       this.catalog,
       weights,
+      settings.boundaryWeight,
     );
     timings.mask4 = settings.collectTimings ? now() - started : 0;
     allocations += 2;
@@ -354,6 +459,7 @@ export class GeometryOptimizer {
         settings.keepAfter8,
         this.catalog,
         weights,
+        settings.boundaryWeight,
       );
       timings.mask8 = settings.collectTimings ? now() - started : 0;
       allocations += 2;
@@ -395,6 +501,7 @@ export class GeometryOptimizer {
           Math.max(1, settings.alternatives + 1),
           this.catalog,
           weights,
+          settings.boundaryWeight,
         );
         timings.mask16 = settings.collectTimings ? now() - started : 0;
         allocations += 2;

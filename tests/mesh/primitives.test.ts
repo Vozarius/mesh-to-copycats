@@ -30,6 +30,12 @@ describe('mesh primitives', () => {
     expect(mesh.bounds[5]).toBeCloseTo(5);
   });
 
+  it('reuses packed buffers for an identity transform', () => {
+    const mesh = createSphereMesh({ radius: 2 });
+    expect(transformMesh(mesh, {})).toBe(mesh);
+    expect(transformMesh(mesh, { rotationDegrees: [0, 0, 0], uniformScale: 1 })).toBe(mesh);
+  });
+
   it('rejects non-finite transforms', () => {
     expect(() => transformMesh(createPlaneMesh(), { translation: [0, Number.NaN, 0] }))
       .toThrow(/finite/u);

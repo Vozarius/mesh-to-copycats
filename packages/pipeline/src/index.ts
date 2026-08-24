@@ -10,7 +10,6 @@ import {
   createSparseCellOctantOccupancy,
   createSparseCellSolidOccupancy,
   getSparseCellSurfaceStatistics,
-  maskToHex,
   popcountMask,
   rasterizeSparseSurface,
   type PackedSparseSurface,
@@ -84,6 +83,30 @@ interface PipelineState {
   readonly shapeIds: Uint32Array;
   readonly surface: PackedSparseSurface;
   readonly usedResolutions: Uint8Array;
+}
+
+const GEOMETRY_CACHE_LIMIT = 8_192;
+
+function geometryCacheKey(mask: Uint32Array): string {
+  const codeUnits = new Uint16Array(mask.length * 2);
+  for (let word = 0; word < mask.length; word += 1) {
+    const value = mask[word] ?? 0;
+    codeUnits[word * 2] = value & 0xffff;
+    codeUnits[word * 2 + 1] = value >>> 16;
+  }
+  return String.fromCharCode(...codeUnits);
+}
+
+function cacheGeometry(
+  cache: Map<string, CachedGeometryResult>,
+  key: string,
+  value: CachedGeometryResult,
+): void {
+  if (cache.size >= GEOMETRY_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, value);
 }
 
 function batchSize(value: number | undefined): number {
@@ -173,7 +196,8 @@ function optimizeBatchRange(
     const sourceOccupancy = state.orientationSign === 0
       ? createSparseCellOccupancy(options.mesh, state.surface, cell)
       : createSparseCellSolidOccupancy(options.mesh, state.surface, cell, state.orientationSign);
-    const planar = getSparseCellSurfaceStatistics(options.mesh, state.surface, cell).normalVariance <=
+    const statistics = getSparseCellSurfaceStatistics(options.mesh, state.surface, cell);
+    const planar = statistics.normalVariance <=
       (options.planarNormalVarianceThreshold ?? 0.025);
     const occupancy = options.expandPlanarImageOctants === true && planar
       ? createSparseCellOctantOccupancy(options.mesh, state.surface, cell)
@@ -184,9 +208,12 @@ function optimizeBatchRange(
       isExactOctantUnion(occupancy);
     state.planarBytePreferred[cell] = preferByte ? 1 : 0;
     const visible = popcountMask(mask16) > 0;
-    const key = maskToHex(mask16);
+    const key = geometryCacheKey(mask16);
     const cached = state.geometryCache.get(key);
     if (cached !== undefined) {
+      // Refresh the insertion order so frequently reused masks survive the cap.
+      state.geometryCache.delete(key);
+      state.geometryCache.set(key, cached);
       applyCachedGeometry(state, cell, cached);
       continue;
     }
@@ -217,7 +244,7 @@ function optimizeBatchRange(
         shapeId: result.shapeIds[index] ?? 0,
         usedResolution: result.usedResolutions[index] ?? 0,
       };
-      state.geometryCache.set(key, cached);
+      cacheGeometry(state.geometryCache, key, cached);
       for (const cell of pendingCells.get(key) ?? []) {
         applyCachedGeometry(state, cell, cached);
       }

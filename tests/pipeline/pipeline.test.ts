@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import { createSphereMesh, finalizeMesh } from '../../packages/mesh/src/index.js';
 import {
+  createGeometryOptimizer,
+} from '../../packages/optimizer/src/index.js';
+import {
   optimizeMesh,
   optimizeMeshProgressive,
 } from '../../packages/pipeline/src/index.js';
 import { getFixtureCatalog } from '../../packages/shapes/src/index.js';
+import { createSparseCellSolidOccupancy } from '../../packages/voxelizer/src/index.js';
 
 function twoCellMesh() {
   return finalizeMesh({
@@ -119,5 +123,43 @@ describe('sparse optimization pipeline', () => {
     expect(result.missingCounts[0]).toBe(0);
     expect(Array.from(catalog.getRealizationShapeIds(result.geometryIds[0] ?? 0))
       .map((shapeId) => catalog.blockIds[shapeId])).toContain('fixture:copycat_byte');
+  });
+
+  it('uses the same single-pass objective in the cell and mesh APIs', () => {
+    const catalog = getFixtureCatalog();
+    const optimizer = createGeometryOptimizer({ catalog });
+    const mesh = createSphereMesh({ latitudeSegments: 16, longitudeSegments: 24, radius: 3 });
+    const result = optimizeMesh({ catalog, mesh });
+    for (let cell = 0; cell < result.surface.cellCount; cell += 1) {
+      const occupancy = createSparseCellSolidOccupancy(
+        mesh,
+        result.surface,
+        cell,
+        result.surface.orientationSign,
+      );
+      const geometryOnly = optimizer.optimizeCell({ excludeAir: true, occupancy });
+      expect(result.geometryIds[cell]).toBe(geometryOnly.best.geometryId);
+      expect(result.geometryErrors[cell]).toBeCloseTo(geometryOnly.best.geometryError, 6);
+    }
+  });
+
+  it('conservatively covers a sphere when only Full Block and Byte lattices are enabled', () => {
+    const catalog = getFixtureCatalog();
+    const allowedGeometryIds = new Uint8Array(catalog.geometryCount);
+    for (let geometryId = 0; geometryId < catalog.geometryCount; geometryId += 1) {
+      for (const shapeId of catalog.getRealizationShapeIds(geometryId)) {
+        const blockId = catalog.blockIds[shapeId] ?? '';
+        if (blockId !== 'fixture:full_cube' && blockId !== 'fixture:copycat_byte') continue;
+        allowedGeometryIds[geometryId] = 1;
+        break;
+      }
+    }
+    const result = optimizeMesh({
+      allowedGeometryIds,
+      catalog,
+      mesh: createSphereMesh({ latitudeSegments: 16, longitudeSegments: 24, radius: 3 }),
+    });
+    expect(result.surface.cellCount).toBeGreaterThan(0);
+    expect(Array.from(result.missingCounts).every((count) => count === 0)).toBe(true);
   });
 });

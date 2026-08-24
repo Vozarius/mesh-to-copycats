@@ -69,20 +69,26 @@ export function EditorScene({
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
     if (mesh.texcoords !== undefined) geometry.setAttribute('uv', new THREE.BufferAttribute(mesh.texcoords, 2));
-    const groupedIndices: number[] = [];
-    for (let material = 0; material < mesh.materialNames.length; material += 1) {
-      const start = groupedIndices.length;
-      for (let triangle = 0; triangle < mesh.triangleMaterials.length; triangle += 1) {
-        if ((mesh.triangleMaterials[triangle] ?? 0) !== material) continue;
-        groupedIndices.push(
-          mesh.indices[triangle * 3] ?? 0,
-          mesh.indices[triangle * 3 + 1] ?? 0,
-          mesh.indices[triangle * 3 + 2] ?? 0,
-        );
-      }
-      if (groupedIndices.length > start) geometry.addGroup(start, groupedIndices.length - start, material);
+    const materialIndexCounts = new Uint32Array(mesh.materialNames.length);
+    for (const material of mesh.triangleMaterials) {
+      materialIndexCounts[material] = (materialIndexCounts[material] ?? 0) + 3;
     }
-    geometry.setIndex(new THREE.BufferAttribute(Uint32Array.from(groupedIndices), 1));
+    const materialIndexCursors = new Uint32Array(mesh.materialNames.length);
+    let groupedIndexCount = 0;
+    for (let material = 0; material < mesh.materialNames.length; material += 1) {
+      materialIndexCursors[material] = groupedIndexCount;
+      const count = materialIndexCounts[material] ?? 0;
+      if (count > 0) geometry.addGroup(groupedIndexCount, count, material);
+      groupedIndexCount += count;
+    }
+    const groupedIndices = new Uint32Array(groupedIndexCount);
+    for (let triangle = 0; triangle < mesh.triangleMaterials.length; triangle += 1) {
+      const material = mesh.triangleMaterials[triangle] ?? 0;
+      const cursor = materialIndexCursors[material] ?? 0;
+      groupedIndices.set(mesh.indices.subarray(triangle * 3, triangle * 3 + 3), cursor);
+      materialIndexCursors[material] = cursor + 3;
+    }
+    geometry.setIndex(new THREE.BufferAttribute(groupedIndices, 1));
     geometry.computeVertexNormals();
     const atlas = mesh.textureAtlas;
     const wrapMode = (mode: number) => mode === 10497
@@ -94,7 +100,7 @@ export function EditorScene({
           const offset = atlas.offsets[textureIndex] ?? 0;
           const end = atlas.offsets[textureIndex + 1] ?? offset;
           const texture = new THREE.DataTexture(
-            atlas.rgbaSrgb.slice(offset, end),
+            atlas.rgbaSrgb.subarray(offset, end),
             atlas.widths[textureIndex] ?? 1,
             atlas.heights[textureIndex] ?? 1,
             THREE.RGBAFormat,
@@ -139,6 +145,8 @@ export function EditorScene({
 
     const optimizedMeshes: THREE.InstancedMesh[] = [];
     const optimizedTextures: THREE.DataTexture[] = [];
+    const optimizedCube = new THREE.BoxGeometry(1, 1, 1);
+    const instanceColor = new THREE.Color();
     if (optimizedPositions !== undefined && optimizedPositions.length > 0) {
       const groups = new Map<number, number[]>();
       for (let instance = 0; instance < optimizedPositions.length / 3; instance += 1) {
@@ -158,7 +166,7 @@ export function EditorScene({
           textureEnd !== undefined && textureEnd - textureOffset === textureWidth * textureHeight * 4
         ) {
           texture = new THREE.DataTexture(
-            paletteTextureRgbaSrgb.slice(textureOffset, textureEnd),
+            paletteTextureRgbaSrgb.subarray(textureOffset, textureEnd),
             textureWidth,
             textureHeight,
             THREE.RGBAFormat,
@@ -171,7 +179,6 @@ export function EditorScene({
           texture.needsUpdate = true;
           optimizedTextures.push(texture);
         }
-        const cube = new THREE.BoxGeometry(1, 1, 1);
         const material = new THREE.MeshStandardMaterial({
           color: texture === undefined ? '#d5a843' : '#ffffff',
           map: texture,
@@ -179,7 +186,7 @@ export function EditorScene({
           roughness: 0.58,
           vertexColors: texture === undefined,
         });
-        const optimized = new THREE.InstancedMesh(cube, material, instances.length);
+        const optimized = new THREE.InstancedMesh(optimizedCube, material, instances.length);
         const matrix = new THREE.Matrix4();
         for (let localInstance = 0; localInstance < instances.length; localInstance += 1) {
           const instance = instances[localInstance] ?? 0;
@@ -195,11 +202,12 @@ export function EditorScene({
           );
           optimized.setMatrixAt(localInstance, matrix);
           if (texture === undefined && optimizedColors !== undefined) {
-            optimized.setColorAt(localInstance, new THREE.Color(
+            instanceColor.setRGB(
               optimizedColors[instance * 3] ?? 0.5,
               optimizedColors[instance * 3 + 1] ?? 0.5,
               optimizedColors[instance * 3 + 2] ?? 0.5,
-            ));
+            );
+            optimized.setColorAt(localInstance, instanceColor);
           }
         }
         optimized.instanceMatrix.needsUpdate = true;
@@ -243,9 +251,9 @@ export function EditorScene({
       for (const material of originalMaterials) material.dispose();
       for (const texture of optimizedTextures) texture.dispose();
       for (const optimized of optimizedMeshes) {
-        optimized.geometry.dispose();
         (optimized.material as THREE.Material).dispose();
       }
+      optimizedCube.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };

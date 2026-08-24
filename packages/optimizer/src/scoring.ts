@@ -3,7 +3,6 @@ import type { Resolution } from '@mesh-to-copycats/shared';
 import {
   mirrorMask,
   popcount32,
-  popcountMask,
   wordCountForResolution,
 } from '@mesh-to-copycats/voxelizer';
 
@@ -64,6 +63,30 @@ export function scoreToNumber(score: WeightedScore): number {
   return score.numerator / (score.denominator * WEIGHT_SCALE);
 }
 
+const boundaryMasks = new Map<Resolution, Uint32Array>();
+const BOUNDARY_MISSING_MULTIPLIER = 1.25;
+
+function boundaryMask(resolution: Resolution): Uint32Array {
+  const cached = boundaryMasks.get(resolution);
+  if (cached !== undefined) return cached;
+  const mask = new Uint32Array(wordCountForResolution(resolution));
+  for (let z = 0; z < resolution; z += 1) {
+    for (let y = 0; y < resolution; y += 1) {
+      for (let x = 0; x < resolution; x += 1) {
+        if (
+          x !== 0 && x !== resolution - 1 &&
+          y !== 0 && y !== resolution - 1 &&
+          z !== 0 && z !== resolution - 1
+        ) continue;
+        const bit = x + resolution * (y + resolution * z);
+        mask[bit >>> 5] = (mask[bit >>> 5] ?? 0) | (1 << (bit & 31));
+      }
+    }
+  }
+  boundaryMasks.set(resolution, mask);
+  return mask;
+}
+
 export function scoreMaskAtOffset(
   target: Uint32Array,
   candidatePool: Uint32Array,
@@ -71,35 +94,44 @@ export function scoreMaskAtOffset(
   resolution: Resolution,
   weights: QuantizedWeights,
   bound?: WeightedScore,
+  boundaryWeight = 0,
 ): WeightedScore | undefined {
   const words = wordCountForResolution(resolution);
   if (target.length !== words || candidateOffset < 0 || candidateOffset + words > candidatePool.length) {
     throw new RangeError('Invalid occupancy mask view');
   }
-
-  const targetPopulation = popcountMask(target);
-  let candidatePopulation = 0;
-  for (let index = 0; index < words; index += 1) {
-    candidatePopulation += popcount32(candidatePool[candidateOffset + index] ?? 0);
+  if (!Number.isFinite(boundaryWeight) || boundaryWeight < 0 || boundaryWeight > 4) {
+    throw new RangeError('Boundary weight must be finite and in 0..4');
   }
-  const maxFinalUnion = Math.min(
-    resolution * resolution * resolution,
-    targetPopulation + candidatePopulation,
-  );
 
+  const boundary = boundaryMask(resolution);
+  const boundaryScale = Math.round(boundaryWeight * resolution);
+  const maxFinalUnion = resolution ** 3;
   let missingCount = 0;
   let extraCount = 0;
   let unionCount = 0;
+  let boundaryMissingCount = 0;
+  let boundaryExtraCount = 0;
   for (let index = 0; index < words; index += 1) {
     const targetWord = target[index] ?? 0;
     const candidateWord = candidatePool[candidateOffset + index] ?? 0;
-    missingCount += popcount32(targetWord & ~candidateWord);
-    extraCount += popcount32(candidateWord & ~targetWord);
-    unionCount += popcount32(targetWord | candidateWord);
+    const missingWord = targetWord & ~candidateWord;
+    const extraWord = candidateWord & ~targetWord;
+    const unionWord = targetWord | candidateWord;
+    const boundaryWord = boundary[index] ?? 0;
+    missingCount += popcount32(missingWord);
+    extraCount += popcount32(extraWord);
+    unionCount += popcount32(unionWord);
+    if (boundaryScale !== 0) {
+      boundaryMissingCount += popcount32(missingWord & boundaryWord);
+      boundaryExtraCount += popcount32(extraWord & boundaryWord);
+    }
 
     if (bound !== undefined && (index & 7) === 7) {
       const partialNumerator =
-        missingCount * weights.missing + extraCount * weights.extra;
+        (missingCount + boundaryMissingCount * boundaryScale *
+          BOUNDARY_MISSING_MULTIPLIER) * weights.missing +
+        (extraCount + boundaryExtraCount * boundaryScale) * weights.extra;
       if (
         partialNumerator * bound.denominator >
         bound.numerator * Math.max(1, maxFinalUnion)
@@ -113,7 +145,10 @@ export function scoreMaskAtOffset(
     denominator: Math.max(1, unionCount),
     extraCount,
     missingCount,
-    numerator: missingCount * weights.missing + extraCount * weights.extra,
+    numerator:
+      (missingCount + boundaryMissingCount * boundaryScale *
+        BOUNDARY_MISSING_MULTIPLIER) * weights.missing +
+      (extraCount + boundaryExtraCount * boundaryScale) * weights.extra,
   };
 }
 
@@ -233,6 +268,7 @@ export function rankGeometryCandidates(
   keep: number,
   catalog: PackedShapeCatalog,
   weights: QuantizedWeights,
+  boundaryWeight = 0,
 ): ScoredGeometry[] {
   const ranked: ScoredGeometry[] = [];
   const pool = catalog.getMaskPool(resolution);
@@ -249,15 +285,16 @@ export function rankGeometryCandidates(
     const bound = symmetryTransforms.length === 0 && ranked.length >= keep
       ? ranked[Math.min(keep, ranked.length) - 1]
       : undefined;
-    const score = scoreMaskAtOffset(
+    const baseScore = scoreMaskAtOffset(
       target,
       pool,
       catalog.geometryMaskOffset(geometryId, resolution),
       resolution,
       weights,
       bound,
+      boundaryWeight,
     );
-    if (score === undefined) continue;
+    if (baseScore === undefined) continue;
     const candidateMoments = geometryMoments(catalog, geometryId, resolution);
     const momentError =
       (targetMoments.centerX - candidateMoments.centerX) ** 2 +
@@ -278,7 +315,7 @@ export function rankGeometryCandidates(
         symmetryError += popcount32((candidate[word] ?? 0) ^ (reflected[word] ?? 0));
       }
     }
-    ranked.push({ ...score, geometryId, momentError, symmetryError });
+    ranked.push({ ...baseScore, geometryId, momentError, symmetryError });
     ranked.sort((left, right) => compareScoredGeometry(left, right, catalog));
     if (ranked.length > keep) {
       const cutoff = ranked[keep - 1]!;

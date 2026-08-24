@@ -748,7 +748,7 @@ export function App() {
           </dl>
           {result !== undefined && materialUsage.length > 0 && <div className="material-list">
             {materialUsage.map((paletteIndex) => <div key={result.paletteItemIds[paletteIndex]}>
-              <i style={{ background: `rgb(${Math.round((result.paletteSrgb[paletteIndex * 3] ?? 0.5) * 255)} ${(Math.round((result.paletteSrgb[paletteIndex * 3 + 1] ?? 0.5) * 255))} ${(Math.round((result.paletteSrgb[paletteIndex * 3 + 2] ?? 0.5) * 255))})` }} />
+              <i style={{ background: `rgb(${Math.round((materialLibrary?.srgb[paletteIndex * 3] ?? 0.5) * 255)} ${(Math.round((materialLibrary?.srgb[paletteIndex * 3 + 1] ?? 0.5) * 255))} ${(Math.round((materialLibrary?.srgb[paletteIndex * 3 + 2] ?? 0.5) * 255))})` }} />
               <span>{(result.paletteItemIds[paletteIndex] ?? '').replace('minecraft:', '')}</span>
             </div>)}
           </div>}
@@ -764,10 +764,10 @@ export function App() {
           optimizedPaletteIndexes={result?.previewPaletteIndexes}
           optimizedPositions={result?.previewPositions}
           optimizedScales={result?.previewScales}
-          paletteTextureHeights={result?.paletteTextureHeights}
-          paletteTextureOffsets={result?.paletteTextureOffsets}
-          paletteTextureRgbaSrgb={result?.paletteTextureRgbaSrgb}
-          paletteTextureWidths={result?.paletteTextureWidths}
+          paletteTextureHeights={materialLibrary?.textureHeights}
+          paletteTextureOffsets={materialLibrary?.textureOffsets}
+          paletteTextureRgbaSrgb={materialLibrary?.textureRgbaSrgb}
+          paletteTextureWidths={materialLibrary?.textureWidths}
           view={view}
         />
         <div className="view-tabs" role="group" aria-label="Preview layer">

@@ -102,4 +102,27 @@ describe('symmetric occupancy scoring', () => {
       { numRuns: 250, seed: 0x5eed_1003 },
     );
   });
+
+  it('penalizes a missing cell-boundary contact more than an equal interior miss', () => {
+    const set = (mask: Uint32Array, x: number, y: number, z: number) => {
+      const bit = x + 4 * (y + 4 * z);
+      mask[bit >>> 5] = (mask[bit >>> 5] ?? 0) | (1 << (bit & 31));
+    };
+    const target = new Uint32Array(2);
+    const missesBoundary = new Uint32Array(2);
+    const missesInterior = new Uint32Array(2);
+    set(target, 0, 1, 1);
+    set(target, 1, 1, 1);
+    set(missesBoundary, 1, 1, 1);
+    set(missesInterior, 0, 1, 1);
+    const weights = quantizeWeights(1, 1);
+    const boundaryMiss = requireScore(
+      scoreMaskAtOffset(target, missesBoundary, 0, 4, weights, undefined, 0.25),
+    );
+    const interiorMiss = requireScore(
+      scoreMaskAtOffset(target, missesInterior, 0, 4, weights, undefined, 0.25),
+    );
+    expect(boundaryMiss.missingCount).toBe(interiorMiss.missingCount);
+    expect(compareWeightedScore(boundaryMiss, interiorMiss)).toBeGreaterThan(0);
+  });
 });

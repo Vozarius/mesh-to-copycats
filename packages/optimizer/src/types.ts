@@ -23,6 +23,8 @@ export interface OptimizerSettings {
   readonly maxGenericCandidates: number;
   readonly missingWeight: number;
   readonly qualityMode: QualityMode;
+  /** Weight of cell-boundary occupancy in the single geometry-distance objective. */
+  readonly boundaryWeight: number;
 }
 
 export const DEFAULT_OPTIMIZER_SETTINGS: OptimizerSettings = {
@@ -39,6 +41,7 @@ export const DEFAULT_OPTIMIZER_SETTINGS: OptimizerSettings = {
   maxGenericCandidates: 48,
   missingWeight: 1,
   qualityMode: QualityMode.BALANCED,
+  boundaryWeight: 0.125,
 };
 
 export interface OptimizeCellInput {

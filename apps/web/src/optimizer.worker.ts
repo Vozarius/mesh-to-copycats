@@ -1,5 +1,11 @@
 /// <reference lib="webworker" />
 
+import {
+  compareWeightedScore,
+  DEFAULT_OPTIMIZER_SETTINGS,
+  quantizeWeights,
+  scoreMaskAtOffset,
+} from '../../../packages/optimizer/src/index.js';
 import { optimizeMeshProgressive } from '@mesh-to-copycats/pipeline';
 import {
   getFixtureCatalog,
@@ -15,7 +21,6 @@ import {
   createSparseCellOccupancy,
   createSparseCellOctantOccupancy,
   createSparseCellSolidOccupancy,
-  popcount32,
 } from '../../../packages/voxelizer/src/index.js';
 
 import {
@@ -103,12 +108,33 @@ function previewData(
   truncated: boolean;
 } {
   const maximumInstances = 250_000;
-  const positions = new Float32Array(maximumInstances * 3);
-  const colors = new Float32Array(maximumInstances * 3);
-  const scales = new Float32Array(maximumInstances * 3);
-  const paletteIndexes = new Uint32Array(maximumInstances);
-  paletteIndexes.fill(0xffff_ffff);
+  let capacity = Math.min(
+    maximumInstances,
+    Math.max(1_024, materials.paletteIndexes.length * 2),
+  );
+  let positions = new Float32Array(capacity * 3);
+  let colors = new Float32Array(capacity * 3);
+  let scales = new Float32Array(capacity * 3);
+  let paletteIndexes = new Uint32Array(capacity);
   let instances = 0;
+  const ensureCapacity = () => {
+    if (instances < capacity) return;
+    const nextCapacity = Math.min(maximumInstances, Math.max(capacity + 1, capacity * 2));
+    const nextPositions = new Float32Array(nextCapacity * 3);
+    const nextColors = new Float32Array(nextCapacity * 3);
+    const nextScales = new Float32Array(nextCapacity * 3);
+    const nextPaletteIndexes = new Uint32Array(nextCapacity);
+    nextPositions.set(positions);
+    nextColors.set(colors);
+    nextScales.set(scales);
+    nextPaletteIndexes.set(paletteIndexes);
+    positions = nextPositions;
+    colors = nextColors;
+    scales = nextScales;
+    paletteIndexes = nextPaletteIndexes;
+    capacity = nextCapacity;
+  };
+  const visited = new Uint8Array(4096);
   for (let cell = 0; cell < materials.shapeIds.length && instances < maximumInstances; cell += 1) {
     const shapeId = materials.shapeIds[cell] ?? 0;
     const globalPartStart = catalog.shapePartOffsets[shapeId] ?? 0;
@@ -118,7 +144,7 @@ function previewData(
       const assignment = assignmentStart + globalPart - globalPartStart;
       const maskOffset = catalog.partMask16Offsets[globalPart] ?? globalPart * 128;
       const mask = catalog.partMasks16.subarray(maskOffset, maskOffset + 128);
-      const visited = new Uint8Array(4096);
+      visited.fill(0);
       const occupied = (x: number, y: number, z: number) => {
         const bit = x + 16 * (y + 16 * z);
         return visited[bit] === 0 && ((mask[bit >>> 5] ?? 0) & (1 << (bit & 31))) !== 0;
@@ -150,6 +176,7 @@ function previewData(
                 visited.fill(1, x + 16 * (markY + 16 * markZ), xEnd + 16 * (markY + 16 * markZ));
               }
             }
+            ensureCapacity();
             positions[instances * 3] = (cellX[cell] ?? 0) + (x + xEnd) / 32;
             positions[instances * 3 + 1] = (cellY[cell] ?? 0) + (y + yEnd) / 32;
             positions[instances * 3 + 2] = (cellZ[cell] ?? 0) + (z + zEnd) / 32;
@@ -174,10 +201,10 @@ function previewData(
     }
   }
   return {
-    colors: colors.slice(0, instances * 3),
-    paletteIndexes: paletteIndexes.slice(0, instances),
-    positions: positions.slice(0, instances * 3),
-    scales: scales.slice(0, instances * 3),
+    colors: colors.subarray(0, instances * 3),
+    paletteIndexes: paletteIndexes.subarray(0, instances),
+    positions: positions.subarray(0, instances * 3),
+    scales: scales.subarray(0, instances * 3),
     truncated: instances === maximumInstances,
   };
 }
@@ -291,11 +318,18 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         sourceMaterialPaletteIndexes[sourceMaterial] = paletteIndex;
       }
       const neighborStarted = performance.now();
+      const seedShapeByGeometry = new Map<number, number>();
       const seedShapeIds = Uint32Array.from(result.geometryIds, (geometryId) => {
-        const shapeId = Array.from(loaded.catalog.getRealizationShapeIds(geometryId)).find(
-          (candidate) => allowedShapeIds[candidate] === 1,
-        );
+        let shapeId = seedShapeByGeometry.get(geometryId);
+        if (shapeId === undefined) {
+          for (const candidate of loaded.catalog.getRealizationShapeIds(geometryId)) {
+            if (allowedShapeIds[candidate] !== 1) continue;
+            shapeId = candidate;
+            break;
+          }
+        }
         if (shapeId === undefined) throw new Error(`Geometry ${geometryId} has no enabled realization`);
+        seedShapeByGeometry.set(geometryId, shapeId);
         return shapeId;
       });
       const neighbors = loaded.neighbors === undefined
@@ -311,9 +345,9 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
             surface: result.surface,
             transitions: loaded.neighbors,
           });
-      // Extracted neighbour-dependent states are authoritative Minecraft behavior, but
-      // their alternate outline must never open more of the source surface than the
-      // geometry selected by the optimizer. Reject only coverage-regressing transitions.
+      // Neighbor-dependent Minecraft states may change the outline. Keep them only when
+      // they do not worsen the same mathematical objective used by geometry selection.
+      const neighborGeometryWeights = quantizeWeights(1, 1);
       for (let cell = 0; cell < neighbors.geometryIds.length; cell += 1) {
         const geometryId = neighbors.geometryIds[cell] ?? 0;
         const resolvedShapeId = neighbors.shapeIds[cell] ?? 0;
@@ -330,11 +364,30 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
             : createSparseCellSolidOccupancy(request.mesh, result.surface, cell, orientationSign);
         const target = occupancy.getMask(16);
         const candidate = loaded.catalog.getGeometryMask(geometryId, 16);
-        let missing = 0;
-        for (let word = 0; word < target.length; word += 1) {
-          missing += popcount32((target[word] ?? 0) & ~(candidate[word] ?? 0));
-        }
-        if (missing <= (result.missingCounts[cell] ?? 0)) continue;
+        const baseline = loaded.catalog.getGeometryMask(result.geometryIds[cell] ?? 0, 16);
+        const candidateScore = scoreMaskAtOffset(
+          target,
+          candidate,
+          0,
+          16,
+          neighborGeometryWeights,
+          undefined,
+          DEFAULT_OPTIMIZER_SETTINGS.boundaryWeight,
+        );
+        const baselineScore = scoreMaskAtOffset(
+          target,
+          baseline,
+          0,
+          16,
+          neighborGeometryWeights,
+          undefined,
+          DEFAULT_OPTIMIZER_SETTINGS.boundaryWeight,
+        );
+        if (
+          candidateScore !== undefined &&
+          baselineScore !== undefined &&
+          compareWeightedScore(candidateScore, baselineScore) <= 0
+        ) continue;
         neighbors.geometryIds[cell] = result.geometryIds[cell] ?? 0;
         neighbors.shapeIds[cell] = seedShapeIds[cell] ?? 0;
       }
@@ -395,13 +448,6 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         materialDirections: materials.materialDirections,
         paletteIndexes: materials.paletteIndexes,
         paletteItemIds: palette.itemIds,
-        // Never transfer a buffer owned by the cached production palette. The first build would
-        // otherwise detach it and make every subsequent build fail in postMessage().
-        paletteSrgb: palette.srgb.slice(),
-        paletteTextureHeights: palette.previewTextureAtlas?.heights.slice() ?? new Uint16Array(),
-        paletteTextureOffsets: palette.previewTextureAtlas?.offsets.slice() ?? new Uint32Array(),
-        paletteTextureRgbaSrgb: palette.previewTextureAtlas?.rgbaSrgb.slice() ?? new Uint8Array(),
-        paletteTextureWidths: palette.previewTextureAtlas?.widths.slice() ?? new Uint16Array(),
         partIds: materials.partIds,
         partKeys,
         previewColors: preview.colors,
@@ -437,11 +483,6 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         response.materialErrors.buffer,
         response.materialDirections.buffer,
         response.paletteIndexes.buffer,
-        response.paletteSrgb.buffer,
-        response.paletteTextureHeights.buffer,
-        response.paletteTextureOffsets.buffer,
-        response.paletteTextureRgbaSrgb.buffer,
-        response.paletteTextureWidths.buffer,
         response.partIds.buffer,
         response.previewColors.buffer,
         response.previewPositions.buffer,

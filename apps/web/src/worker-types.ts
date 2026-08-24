@@ -63,11 +63,6 @@ export interface CompleteResponse {
   readonly materialDirections: Uint8Array;
   readonly paletteIndexes: Uint32Array;
   readonly paletteItemIds: readonly string[];
-  readonly paletteSrgb: Float32Array;
-  readonly paletteTextureHeights: Uint16Array;
-  readonly paletteTextureOffsets: Uint32Array;
-  readonly paletteTextureRgbaSrgb: Uint8Array;
-  readonly paletteTextureWidths: Uint16Array;
   readonly partIds: Uint8Array;
   readonly partKeys: readonly string[];
   readonly previewColors: Float32Array;
