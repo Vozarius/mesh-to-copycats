@@ -48,7 +48,7 @@ export interface OptimizeCellInput {
   /** Surface pipelines use this to forbid a visible triangle cell from becoming AIR. */
   readonly excludeAir?: boolean;
   readonly occupancy: TargetOccupancy;
-  /** Requires the selected candidate to contain every target voxel at the final GRID16 level. */
+  /** Prefers full target coverage but falls back to the nearest enabled geometry. */
   readonly requireCoverage?: boolean;
   readonly settings?: Partial<OptimizerSettings>;
 }

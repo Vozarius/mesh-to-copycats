@@ -180,6 +180,7 @@ function evaluateRealization(
   allowedPaletteIndexes: Uint8Array | undefined,
   choiceCache: Map<string, readonly CachedMaterialChoice[]>,
   alphaTolerance: number,
+  relaxConstraints: boolean,
 ): EvaluatedRealization {
   const start = catalog.shapePartOffsets[shapeId] ?? 0;
   const end = catalog.shapePartOffsets[shapeId + 1] ?? start;
@@ -198,7 +199,7 @@ function evaluateRealization(
       shapeId,
       targetAlphas: [],
       targets: [],
-      valid: safety < 2,
+      valid: relaxConstraints || safety < 2,
     };
   }
   let owner = ownerCache.get(shapeId);
@@ -280,7 +281,21 @@ function evaluateRealization(
       .sort((left, right) => right[1] - left[1] || left[0] - right[0])[0]?.[0];
     const compatibility = catalog.partCompatibility[start + localPart] ?? 0xffff_ffff;
     let choices: readonly CachedMaterialChoice[];
-    if (locked !== undefined) {
+    if (relaxConstraints) {
+      const built: CachedMaterialChoice[] = [];
+      for (let paletteIndex = 0; paletteIndex < palette.size; paletteIndex += 1) {
+        if (allowedPaletteIndexes !== undefined && allowedPaletteIndexes[paletteIndex] !== 1) {
+          continue;
+        }
+        built.push({
+          blockId: palette.blockIds[paletteIndex] ?? '',
+          direction: directionOrder[0] ?? 0,
+          paletteIndex,
+          state: '',
+        });
+      }
+      choices = built;
+    } else if (locked !== undefined) {
       const choice = allowedPaletteIndexes !== undefined && allowedPaletteIndexes[locked] !== 1
         ? undefined
         : materialChoice(
@@ -321,7 +336,7 @@ function evaluateRealization(
     for (const choice of choices) {
       const paletteIndex = choice.paletteIndex;
       const alphaDifference = Math.abs((palette.alpha[paletteIndex] ?? 1) - targetAlpha);
-      if (alphaDifference > alphaTolerance) continue;
+      if (!relaxConstraints && alphaDifference > alphaTolerance) continue;
       const error = oklabDistanceSquared(target, paletteOklab(palette, paletteIndex)) +
         alphaDifference * alphaDifference * 0.25;
       const preference = palette.preference[paletteIndex] ?? 0;
@@ -360,7 +375,8 @@ function evaluateRealization(
     shapeId,
     targetAlphas,
     targets,
-    valid: safety < 2 && paletteIndexes.every((index) => index !== INVALID_PALETTE),
+    valid: (relaxConstraints || safety < 2) &&
+      paletteIndexes.every((index) => index !== INVALID_PALETTE),
   };
 }
 
@@ -437,38 +453,17 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
   const fallbackChoiceCache = new Map<string, readonly CachedMaterialChoice[]>();
   for (let cell = 0; cell < geometryIds.length; cell += 1) {
     cellPartOffsets[cell] = partIds.length;
-    let best: EvaluatedRealization | undefined;
-    for (const shapeId of catalog.getRealizationShapeIds(geometryIds[cell] ?? 0)) {
-      if (allowedShapeIds !== undefined && allowedShapeIds[shapeId] !== 1) continue;
-      best = preferred(
-        best,
-        evaluateRealization(
-          catalog,
-          runtime,
-          palette,
-          samples,
-          cell,
-          shapeId,
-          ownerCache,
-          sourceMaterialPaletteIndexes,
-          allowedPaletteIndexes,
-          choiceCache,
-          alphaTolerance,
-        ),
-        catalog,
-        preferredByteCells?.[cell] === 1,
-      );
-    }
-    if (best === undefined) throw new Error(`Geometry ${geometryIds[cell]} has no realizations`);
-    if (!best.valid && allowedPaletteIndexes !== undefined) {
-      // Include Materials is a strong preference, not a reason to make the schematic
-      // impossible to export. Retry against the full palette while retaining Copycats
-      // acceptance, alpha matching and placement-safety validation.
-      let fallback: EvaluatedRealization | undefined;
+    const choose = (
+      candidateSourceMaterialPaletteIndexes: Uint32Array | undefined,
+      candidateAllowedPaletteIndexes: Uint8Array | undefined,
+      candidateChoiceCache: Map<string, readonly CachedMaterialChoice[]>,
+      relaxConstraints: boolean,
+    ): EvaluatedRealization | undefined => {
+      let selected: EvaluatedRealization | undefined;
       for (const shapeId of catalog.getRealizationShapeIds(geometryIds[cell] ?? 0)) {
         if (allowedShapeIds !== undefined && allowedShapeIds[shapeId] !== 1) continue;
-        fallback = preferred(
-          fallback,
+        selected = preferred(
+          selected,
           evaluateRealization(
             catalog,
             runtime,
@@ -477,16 +472,58 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
             cell,
             shapeId,
             ownerCache,
-            undefined,
-            undefined,
-            fallbackChoiceCache,
+            candidateSourceMaterialPaletteIndexes,
+            candidateAllowedPaletteIndexes,
+            candidateChoiceCache,
             alphaTolerance,
+            relaxConstraints,
           ),
           catalog,
           preferredByteCells?.[cell] === 1,
         );
       }
-      if (fallback?.valid === true) best = fallback;
+      return selected;
+    };
+
+    let best = choose(
+      sourceMaterialPaletteIndexes,
+      allowedPaletteIndexes,
+      choiceCache,
+      false,
+    );
+    if (best === undefined) throw new Error(`Geometry ${geometryIds[cell]} has no realizations`);
+
+    if (!best.valid && allowedPaletteIndexes !== undefined) {
+      // First widen Include Materials while retaining alpha, Copycats acceptance and
+      // placement-safety evidence, so the fallback remains valid in Minecraft.
+      const strictFullPalette = choose(
+        undefined,
+        undefined,
+        fallbackChoiceCache,
+        false,
+      );
+      if (strictFullPalette?.valid === true) best = strictFullPalette;
+    }
+    if (!best.valid && allowedPaletteIndexes !== undefined) {
+      // If the catalog proves no compatible option at all, preserve the user's include
+      // choice and use its nearest color as a deterministic last-resort assignment.
+      const includedFallback = choose(
+        undefined,
+        allowedPaletteIndexes,
+        fallbackChoiceCache,
+        true,
+      );
+      if (includedFallback?.valid === true) best = includedFallback;
+    }
+    if (!best.valid) {
+      // Last resort is deterministic and exportable: nearest color from the full palette.
+      const nearestFullPalette = choose(
+        undefined,
+        undefined,
+        fallbackChoiceCache,
+        true,
+      );
+      if (nearestFullPalette?.valid === true) best = nearestFullPalette;
     }
     shapeIds[cell] = best.shapeId;
     invalidCells[cell] = best.valid ? 0 : 1;

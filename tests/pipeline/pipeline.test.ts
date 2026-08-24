@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { finalizeMesh } from '../../packages/mesh/src/index.js';
+import { createSphereMesh, finalizeMesh } from '../../packages/mesh/src/index.js';
 import {
   optimizeMesh,
   optimizeMeshProgressive,
@@ -35,6 +35,26 @@ describe('sparse optimization pipeline', () => {
     expect(Array.from(first.shapeIds)).toEqual(Array.from(second.shapeIds));
     expect(Array.from(first.usedResolutions)).toEqual(Array.from(second.usedResolutions));
     expect(first.timingsMs.total).toBeGreaterThanOrEqual(0);
+  });
+
+  it('uses classic surface voxels when full block is the only enabled geometry', () => {
+    const catalog = getFixtureCatalog();
+    const fullShape = catalog.findShapeId('fixture:full_cube', {})!;
+    const fullGeometry = catalog.shapeGeometry[fullShape]!;
+    const allowedGeometryIds = new Uint8Array(catalog.geometryCount);
+    allowedGeometryIds[fullGeometry] = 1;
+    const result = optimizeMesh({
+      allowedGeometryIds,
+      catalog,
+      mesh: createSphereMesh({ latitudeSegments: 12, longitudeSegments: 16, radius: 3 }),
+    });
+
+    expect(result.surface.cellCount).toBeGreaterThan(0);
+    expect(Array.from(result.geometryIds).every((geometryId) => geometryId === fullGeometry)).toBe(true);
+    const cells = new Set(Array.from({ length: result.surface.cellCount }, (_unused, cell) =>
+      `${result.surface.cellX[cell]},${result.surface.cellY[cell]},${result.surface.cellZ[cell]}`));
+    expect(cells.has('-3,-3,-3')).toBe(false);
+    expect(cells.has('2,2,2')).toBe(false);
   });
 
   it('yields between batches and reports monotonic progress', async () => {
@@ -73,9 +93,9 @@ describe('sparse optimization pipeline', () => {
     });
     expect(result.missingCounts[0]).toBe(0);
     expect(result.planarBytePreferred[0]).toBe(0);
-    expect(catalog.blockIds[result.shapeIds[0] ?? 0]).not.toContain('air');
-    expect(Array.from(catalog.getRealizationShapeIds(result.geometryIds[0] ?? 0))
-      .map((shapeId) => catalog.blockIds[shapeId])).not.toContain('fixture:copycat_byte');
+    const selectedBlockId = catalog.blockIds[result.shapeIds[0] ?? 0] ?? '';
+    expect(selectedBlockId).not.toContain('air');
+    expect(selectedBlockId).not.toContain('copycat_byte');
   });
 
   it('expands an imported image plane to independently materialized Byte octants', () => {

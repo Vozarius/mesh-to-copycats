@@ -64,6 +64,26 @@ describe('sparse surface rasterizer', () => {
     expect(Array.from(second.triangleIndices)).toEqual(Array.from(first.triangleIndices));
   });
 
+  it('uses half-open grid bounds for integer-sized planar meshes', () => {
+    const plane = mesh(
+      [
+        -5, -5, 0,
+        5, -5, 0,
+        5, 5, 0,
+        -5, 5, 0,
+      ],
+      [0, 1, 2, 0, 2, 3],
+    );
+    const surface = rasterizeSparseSurface(plane);
+
+    expect(surface.cellCount).toBe(100);
+    expect(Math.min(...surface.cellX)).toBe(-5);
+    expect(Math.max(...surface.cellX)).toBe(4);
+    expect(Math.min(...surface.cellY)).toBe(-5);
+    expect(Math.max(...surface.cellY)).toBe(4);
+    expect(Array.from(new Set(surface.cellZ))).toEqual([0]);
+  });
+
   it('scales with projected triangle area instead of its 3D bounding-box volume', () => {
     const diagonal = mesh(
       [0.25, 0.25, 0.25, 100.25, 0.25, 100.25, 0.25, 100.25, 100.25],
@@ -90,13 +110,14 @@ describe('sparse surface rasterizer', () => {
       const reflected = cells.get(
         `${-1 - (surface.cellX[cell] ?? 0)},${surface.cellY[cell]},${surface.cellZ[cell]}`,
       );
+      expect(reflected, `missing reflected cell for ${surface.cellX[cell]},${surface.cellY[cell]},${surface.cellZ[cell]}`).not.toBeUndefined();
       if (reflected === undefined) continue;
       const left = createSparseCellSolidOccupancy(sphere, surface, cell, orientation).getMask(16);
       const right = createSparseCellSolidOccupancy(sphere, surface, reflected, orientation).getMask(16);
       expect(Array.from(right)).toEqual(Array.from(mirrorMask(left, 16, 'x')));
       compared++;
     }
-    expect(compared).toBeGreaterThan(10);
+    expect(compared).toBe(surface.cellCount);
   });
 
   it('keeps an open offset surface in triangle-sheet mode', () => {

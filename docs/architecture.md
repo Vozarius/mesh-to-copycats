@@ -138,13 +138,18 @@ this reduces browser metadata from 438.91 MiB to 4.64 MiB.
 ## Sparse mesh processing
 
 OBJ and embedded-buffer GLB 2.0 import produce typed position/index/UV/material
-arrays. The sparse rasterizer projects each triangle along its dominant axis,
-clips it against projected cell squares and emits only actually intersected
-cells. Biased 63-bit keys give deterministic ordering for signed coordinates;
+arrays. Embedded images are decoded in the browser into a packed RGBA atlas, so
+GLB PNG, JPEG, WebP and any other `createImageBitmap` format share one path.
+The sparse rasterizer projects each triangle along its dominant axis, clips it
+against projected cell squares and emits only actually intersected cells.
+Half-open grid ranges remove duplicate rows when a transformed edge lands on an
+integer coordinate. For a watertight mesh, exact boundary planes choose the
+winding-proven interior side; open sheets use a deterministic positive side.
+Biased 63-bit keys give deterministic ordering for signed coordinates, and
 packed offset/posting arrays retain local triangle sets without per-cell object
-graphs. A cell's conservative 16³ surface mask is built on demand and wrapped
-as `AdaptiveOccupancy`, so empty model interiors are never volume-scanned or
-solid-filled.
+graphs. A cell's 16³ mask is built on demand and wrapped as
+`AdaptiveOccupancy`. Closed meshes classify the solid side of the nearest
+local patch, but empty model interiors are never volume-scanned or filled.
 
 ## Exact geometry keys
 
@@ -162,7 +167,10 @@ stairs and slice parameters. A family-independent fallback searches nearby
 4^3 population buckets and ranks them by coarse Hamming and descriptor distance.
 Both streams are merged and deduplicated by `geometryId`, keeping a bounded
 candidate set while allowing a new catalog family to work before it gets a
-special router.
+special router. When the editor supplies a geometry allow-list, that list is a
+hard constraint and every selected geometry enters the 4³ comparison; only the
+best tied survivors continue to 8³ and 16³. Reflection-canonical allow-list
+indexes and candidate moments are cached across cells.
 
 For every resolution the scorer separately counts
 
@@ -183,8 +191,10 @@ Weights are converted to Q12 integers. Scores are ordered by cross
 multiplication rather than floating-point division; empty/empty has denominator
 one and zero error. A conservative denominator bound permits early exit while
 scanning mask words. Equal-score candidates at a cutoff are retained for the
-next level. Final ordering is error, family priority, complexity, then stable
-shape id.
+next level. Final ordering is voxel error, normalized center/variance error,
+reflection symmetry as an exact-score tie-break, family priority, complexity,
+then stable shape id. Coverage is never mandatory in the production pipeline:
+when no enabled state covers the target, the nearest enabled state is returned.
 
 `FAST` uses 4^3 and at most 8^3. `BALANCED` reaches 16^3 only for a tie, small
 margin or complex ambiguous surface. `QUALITY` favors final 16^3 comparison for
@@ -264,23 +274,26 @@ scratch-backed `optimizeCellInto` path or a Rust/WASM kernel.
   part masks retain the overlap, but one owner byte cannot represent coincident
   ownership and a material-stage policy is still required.
 - The Web editor accepts OBJ, GLB and browser-decodable images (as textured
-  planes), creates plane/circle/sphere primitives and allows global palette
-  exclusions before a repeated solve. Source mesh material slots can be locked
-  to generated palette item IDs; the packed solver propagates dominant locks to
-  exact-equivalent multipart realizations without bypassing acceptance or
-  placement validation. Editor settings use a dirty gate so stale results cannot
-  be exported. Scale, XYZ rotation and translation are baked into the same packed
-  mesh consumed by preview and optimization; Center + Ground derives a stable
-  translation from transformed bounds. The source preview renders indexed
-  per-material groups rather than collapsing a GLB to its first material. Image
-  alpha is thresholded before voxelization and greedily merged into textured
-  rectangles, so transparent background creates neither triangles nor cells.
-  Optimized boxes are grouped by resolved palette index and use the generated
-  nearest-filtered texture previews; exact CT/biome tint/Copycat UV cropping is
-  intentionally left to Minecraft rather than asserted by the debug renderer.
-- The sparse rasterizer conservatively marks the triangle surface. It does not
-  perform closed-volume parity filling; by design, cells and microvoxels not
-  crossed by model surface remain air.
+  planes), creates plane/circle/sphere primitives and exposes a grouped material
+  include list before each solve. Embedded GLB textures use browser decoding,
+  including JPEG, while a separate image can be attached to any UV material
+  slot. Source material locks and includes are attempted strictly first. If
+  alpha, acceptance or placement evidence leaves no valid assignment, the solver
+  widens to the nearest strictly compatible palette entry and finally applies a
+  deterministic nearest-color last resort instead of blocking export. Editor
+  settings use a dirty gate so stale results cannot be exported. Scale, XYZ
+  rotation and translation are baked into the same packed mesh consumed by
+  preview and optimization; Center + Ground derives a stable translation from
+  transformed bounds. The source preview renders indexed per-material groups
+  rather than collapsing a GLB to its first material. Image alpha is thresholded
+  before voxelization and greedily merged into textured rectangles, so
+  transparent background creates neither triangles nor cells. Optimized boxes
+  are grouped by resolved palette index and use the generated nearest-filtered
+  texture previews; exact CT/biome tint/Copycat UV cropping is intentionally left
+  to Minecraft rather than asserted by the debug renderer.
+- The sparse rasterizer does not perform whole-volume parity filling. It stores
+  only cells crossed by the surface; watertight cells use local inside
+  half-spaces, while unvisited model interiors remain air by design.
 - `optimizeBatch` returns packed typed arrays, while each internal cell call
   still uses the ergonomic allocating result API. A future scratch-backed
   `optimizeCellInto` or WASM kernel can remove those remaining hot-path objects.

@@ -9,7 +9,6 @@ import {
   createSparseCellOccupancy,
   createSparseCellOctantOccupancy,
   createSparseCellSolidOccupancy,
-  getMeshOrientationSign,
   getSparseCellSurfaceStatistics,
   maskToHex,
   popcountMask,
@@ -111,7 +110,7 @@ function begin(options: OptimizeMeshOptions): {
       geometryErrors: new Float32Array(surface.cellCount),
       geometryIds: new Uint32Array(surface.cellCount),
       missingCounts: new Uint16Array(surface.cellCount),
-      orientationSign: options.useSolidOccupancy === false ? 0 : getMeshOrientationSign(options.mesh, surface),
+      orientationSign: options.useSolidOccupancy === false ? 0 : surface.orientationSign,
       planarBytePreferred: new Uint8Array(surface.cellCount),
       optimizer: new GeometryOptimizer({
         catalog: options.catalog,
@@ -167,7 +166,6 @@ function optimizeBatchRange(
     readonly allowedGeometryIds?: Uint8Array;
     readonly excludeAir: boolean;
     readonly occupancy: ReturnType<typeof createSparseCellOccupancy>;
-    readonly requireCoverage: boolean;
   }> = [];
   const pendingKeys: string[] = [];
   const pendingCells = new Map<string, number[]>();
@@ -203,8 +201,6 @@ function optimizeBatchRange(
       ...(options.allowedGeometryIds === undefined ? {} : { allowedGeometryIds: options.allowedGeometryIds }),
       excludeAir: visible,
       occupancy,
-      // A shell may be hollow, but every rasterized surface microvoxel must stay covered.
-      requireCoverage: visible,
     });
   }
   if (pendingInputs.length > 0) {

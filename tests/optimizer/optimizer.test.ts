@@ -20,6 +20,7 @@ import {
   createMask,
   createSparseCellSolidOccupancy,
   getMeshOrientationSign,
+  popcount32,
   rasterizeSparseSurface,
   DESCRIPTOR,
   mirrorMask,
@@ -432,6 +433,69 @@ describe('catalog-wide exact-target property', () => {
 });
 
 describe('Copycats geometry allow-list', () => {
+  it('returns the nearest selected geometry when no selected state covers the target', () => {
+    const byteShape = requireShapeId(catalog, 'fixture:copycat_byte', byteState(1));
+    const byteGeometry = catalog.shapeGeometry[byteShape]!;
+    const fullShape = requireShapeId(catalog, 'fixture:full_cube', {});
+    const fullGeometry = catalog.shapeGeometry[fullShape]!;
+    const allowedGeometryIds = new Uint8Array(catalog.geometryCount);
+    allowedGeometryIds[byteGeometry] = 1;
+
+    const result = qualityOptimizer.optimizeCell({
+      allowedGeometryIds,
+      excludeAir: true,
+      occupancy: AdaptiveOccupancy.fromMask16(catalog.getGeometryMask(fullGeometry, 16)),
+      requireCoverage: true,
+    });
+
+    expect(result.best.geometryId).toBe(byteGeometry);
+    expect(result.best.missingCount).toBeGreaterThan(0);
+  });
+  it('matches the GRID16 brute-force optimum for Byte-only targets', () => {
+    const allowedGeometryIds = new Uint8Array(catalog.geometryCount);
+    const byteGeometryIds: number[] = [];
+    for (let geometryId = 0; geometryId < catalog.geometryCount; geometryId += 1) {
+      if (!Array.from(catalog.getRealizationShapeIds(geometryId)).some(
+        (shapeId) => catalog.shapeFamily[shapeId] === ShapeFamily.BYTE,
+      )) continue;
+      allowedGeometryIds[geometryId] = 1;
+      byteGeometryIds.push(geometryId);
+    }
+    let seed = 0x5eed_1234;
+    const random = () => {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      return seed >>> 0;
+    };
+    for (let sample = 0; sample < 16; sample += 1) {
+      const target = createMask(16);
+      for (let bit = 0; bit < 4096; bit += 1) {
+        if (random() % 100 < 35) setBit(target, bit);
+      }
+      const result = qualityOptimizer.optimizeCell({
+        allowedGeometryIds,
+        excludeAir: true,
+        occupancy: AdaptiveOccupancy.fromMask16(target),
+      });
+      const error = (geometryId: number): number => {
+        const candidate = catalog.getGeometryMask(geometryId, 16);
+        let missing = 0;
+        let extra = 0;
+        let union = 0;
+        for (let word = 0; word < target.length; word += 1) {
+          missing += popcount32((target[word] ?? 0) & ~(candidate[word] ?? 0));
+          extra += popcount32((candidate[word] ?? 0) & ~(target[word] ?? 0));
+          union += popcount32((target[word] ?? 0) | (candidate[word] ?? 0));
+        }
+        return (missing + extra) / Math.max(1, union);
+      };
+      const bruteForceError = Math.min(...byteGeometryIds.map(error));
+      expect(error(result.best.geometryId)).toBeCloseTo(bruteForceError, 12);
+    }
+  });
+
+
   it('keeps Byte-only solutions reflection-equivariant', () => {
     const byteShape = requireShapeId(catalog, 'fixture:copycat_byte', byteState(0b0010_1101));
     const sourceGeometry = catalog.shapeGeometry[byteShape] ?? 0;
@@ -448,13 +512,11 @@ describe('Copycats geometry allow-list', () => {
       allowedGeometryIds,
       excludeAir: true,
       occupancy: AdaptiveOccupancy.fromMask16(sourceMask),
-      requireCoverage: true,
     });
     const mirrored = qualityOptimizer.optimizeCell({
       allowedGeometryIds,
       excludeAir: true,
       occupancy: AdaptiveOccupancy.fromMask16(mirroredTarget),
-      requireCoverage: true,
     });
 
     expect(Array.from(catalog.getGeometryMask(mirrored.best.geometryId, 16))).toEqual(
@@ -490,13 +552,11 @@ describe('Copycats geometry allow-list', () => {
         allowedGeometryIds,
         excludeAir: true,
         occupancy: createSparseCellSolidOccupancy(sphere, surface, cell, orientation),
-        requireCoverage: true,
       });
       const mirrored = qualityOptimizer.optimizeCell({
         allowedGeometryIds,
         excludeAir: true,
         occupancy: createSparseCellSolidOccupancy(sphere, surface, reflected, orientation),
-        requireCoverage: true,
       });
       expect(
         Array.from(catalog.getGeometryMask(mirrored.best.geometryId, 16)),

@@ -104,7 +104,11 @@ function requiredCoverageCandidates(
     );
     if (fallback.length > 0) return fallback;
   }
-  throw new Error(`No geometry candidate covers the target at ${resolution}³`);
+  if (geometryIds.length > 0) return [...geometryIds];
+  const allowed = Array.from({ length: catalog.geometryCount }, (_unused, geometryId) => geometryId)
+    .filter((geometryId) => isGeometryAllowed === undefined || isGeometryAllowed(geometryId));
+  if (allowed.length > 0) return allowed;
+  throw new Error(`No enabled geometry realization exists at resolution ${resolution}`);
 }
 
 const GEOMETRY_KEY_PREFIX = 'GRID16_EXACT:v1:';
@@ -160,6 +164,39 @@ function reflectedGeometryId(
   const reflected = indexes.get(`${GEOMETRY_KEY_PREFIX}${maskToHex(mask)}`);
   cache[geometryId] = reflected === undefined ? 0xffff_ffff : reflected + 1;
   return reflected;
+}
+
+const allowedGeometryCache = new WeakMap<
+  Uint8Array,
+  WeakMap<PackedShapeCatalog, Array<readonly number[] | undefined>>
+>();
+
+function allowedCanonicalGeometryIds(
+  allowedGeometryIds: Uint8Array,
+  catalog: PackedShapeCatalog,
+  transform: number,
+): readonly number[] {
+  let catalogCache = allowedGeometryCache.get(allowedGeometryIds);
+  if (catalogCache === undefined) {
+    catalogCache = new WeakMap();
+    allowedGeometryCache.set(allowedGeometryIds, catalogCache);
+  }
+  let transforms = catalogCache.get(catalog);
+  if (transforms === undefined) {
+    transforms = Array.from({ length: 8 });
+    catalogCache.set(catalog, transforms);
+  }
+  const cached = transforms[transform];
+  if (cached !== undefined) return cached;
+  const selected: number[] = [];
+  for (let actualId = 0; actualId < catalog.geometryCount; actualId += 1) {
+    if (allowedGeometryIds[actualId] !== 1) continue;
+    const canonicalId = reflectedGeometryId(catalog, actualId, transform);
+    if (canonicalId !== undefined) selected.push(canonicalId);
+  }
+  selected.sort((left, right) => left - right);
+  transforms[transform] = selected;
+  return selected;
 }
 
 function generateCanonicalCandidates(
@@ -226,15 +263,28 @@ export class GeometryOptimizer {
       return actual !== undefined &&
         (input.allowedGeometryIds === undefined || input.allowedGeometryIds[actual] === 1);
     };
+    const selectedGeometryIds = input.allowedGeometryIds === undefined
+      ? generated.geometryIds
+      : allowedCanonicalGeometryIds(input.allowedGeometryIds, this.catalog, transform);
     let generatedGeometryIds = input.excludeAir === true
-      ? generated.geometryIds.filter((geometryId) => {
+      ? selectedGeometryIds.filter((geometryId) => {
           const actual = actualGeometryId(geometryId);
           if (actual === undefined) return false;
           const shapeId = this.catalog.geometryRepresentativeShape[actual] ?? 0;
           return (this.catalog.shapeFamily[shapeId] ?? 0) !== 0;
         })
-      : generated.geometryIds;
+      : [...selectedGeometryIds];
     generatedGeometryIds = generatedGeometryIds.filter(isGeometryAllowed);
+    if (generatedGeometryIds.length === 0) {
+      generatedGeometryIds = Array.from({ length: this.catalog.geometryCount }, (_unused, id) => id)
+        .filter((id) => {
+          if (!isGeometryAllowed(id)) return false;
+          if (input.excludeAir !== true) return true;
+          const actual = actualGeometryId(id);
+          const shapeId = actual === undefined ? 0 : this.catalog.geometryRepresentativeShape[actual] ?? 0;
+          return (this.catalog.shapeFamily[shapeId] ?? 0) !== 0;
+        });
+    }
     if (input.requireCoverage === true) {
       generatedGeometryIds = requiredCoverageCandidates(
         generatedGeometryIds,

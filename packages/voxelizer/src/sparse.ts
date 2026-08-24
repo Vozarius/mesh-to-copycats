@@ -28,6 +28,7 @@ export interface PackedSparseSurface {
   readonly cellZ: Int32Array;
   readonly epsilon: number;
   readonly origin: Float64Array;
+  readonly orientationSign: -1 | 0 | 1;
   readonly scale: number;
   readonly skippedDegenerateTriangles: number;
   readonly triangleIndices: Uint32Array;
@@ -119,11 +120,33 @@ function clipBoundary(
   return outputCount;
 }
 
+function halfOpenCellRange(
+  minimum: number,
+  maximum: number,
+  epsilon: number,
+  boundarySide = 1,
+): readonly [number, number] {
+  if (maximum - minimum <= epsilon * 2) {
+    const midpoint = (minimum + maximum) / 2;
+    const boundary = Math.round(midpoint);
+    const onBoundary = Math.abs(midpoint - boundary) <= epsilon * 2;
+    const cell = onBoundary
+      ? boundarySide < 0 ? boundary - 1 : boundary
+      : Math.floor(midpoint);
+    return [cell, cell];
+  }
+  return [
+    Math.floor(minimum + epsilon),
+    Math.ceil(maximum - epsilon) - 1,
+  ];
+}
+
 function rasterizeTriangleCells(
   vertices: readonly number[],
   epsilon: number,
   emit: (x: number, y: number, z: number) => void,
   bounds?: GridBounds,
+  orientationSign: -1 | 0 | 1 = 0,
 ): boolean {
   const ax = vertices[0] ?? 0;
   const ay = vertices[1] ?? 0;
@@ -159,10 +182,16 @@ function rasterizeTriangleCells(
     vertex(2, uAxis),
     vertex(2, vAxis),
   ];
-  let minimumU = Math.floor(Math.min(projected[0]!, projected[2]!, projected[4]!) - epsilon);
-  let maximumU = Math.floor(Math.max(projected[0]!, projected[2]!, projected[4]!) + epsilon);
-  let minimumV = Math.floor(Math.min(projected[1]!, projected[3]!, projected[5]!) - epsilon);
-  let maximumV = Math.floor(Math.max(projected[1]!, projected[3]!, projected[5]!) + epsilon);
+  let [minimumU, maximumU] = halfOpenCellRange(
+    Math.min(projected[0]!, projected[2]!, projected[4]!),
+    Math.max(projected[0]!, projected[2]!, projected[4]!),
+    epsilon,
+  );
+  let [minimumV, maximumV] = halfOpenCellRange(
+    Math.min(projected[1]!, projected[3]!, projected[5]!),
+    Math.max(projected[1]!, projected[3]!, projected[5]!),
+    epsilon,
+  );
   if (bounds !== undefined) {
     minimumU = Math.max(minimumU, bounds.minimum);
     maximumU = Math.min(maximumU, bounds.maximum);
@@ -193,8 +222,13 @@ function rasterizeTriangleCells(
         minimumD = Math.min(minimumD, d);
         maximumD = Math.max(maximumD, d);
       }
-      let firstD = Math.floor(minimumD - epsilon);
-      let lastD = Math.floor(maximumD + epsilon);
+      const boundarySide = orientationSign === 0 || normalD * orientationSign < 0 ? 1 : -1;
+      let [firstD, lastD] = halfOpenCellRange(
+        minimumD,
+        maximumD,
+        epsilon,
+        boundarySide,
+      );
       if (bounds !== undefined) {
         firstD = Math.max(firstD, bounds.minimum);
         lastD = Math.min(lastD, bounds.maximum);
@@ -233,6 +267,8 @@ export function rasterizeSparseSurface(
   if (!Number.isFinite(epsilon) || epsilon < 0) {
     throw new RangeError('epsilon must be finite and non-negative');
   }
+  const surfaceOrigin = Float64Array.from(origin);
+  const orientationSign = getMeshOrientationSign(mesh, { origin: surfaceOrigin, scale });
   let cellX = new Int32Array(1024);
   let cellY = new Int32Array(1024);
   let cellZ = new Int32Array(1024);
@@ -286,7 +322,7 @@ export function rasterizeSparseSurface(
     }
     if (!rasterizeTriangleCells(vertices, epsilon, (x, y, z) => {
       add(x, y, z, triangle);
-    })) {
+    }, undefined, orientationSign)) {
       skippedDegenerateTriangles++;
     }
   }
@@ -340,7 +376,8 @@ export function rasterizeSparseSurface(
     cellY: outputY,
     cellZ: outputZ,
     epsilon,
-    origin: Float64Array.from(origin),
+    origin: surfaceOrigin,
+    orientationSign,
     scale,
     skippedDegenerateTriangles,
     triangleIndices: outputTriangles,
@@ -389,6 +426,7 @@ export function rasterizeSparseCellMask16(
         setBit(mask, bitIndex(16, x, y, z));
       },
       { maximum: 15, minimum: 0 },
+      surface.orientationSign,
     );
   }
   return mask;
@@ -458,7 +496,7 @@ export function createSparseCellSolidOccupancy(
   mesh: TriangleMeshView,
   surface: PackedSparseSurface,
   cellIndex: number,
-  orientationSign = getMeshOrientationSign(mesh, surface),
+  orientationSign = surface.orientationSign,
 ): AdaptiveOccupancy {
   if (orientationSign === 0) return createSparseCellOccupancy(mesh, surface, cellIndex);
   const triangles = getSparseCellTriangles(surface, cellIndex);

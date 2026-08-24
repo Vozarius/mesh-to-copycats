@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   applyTextureToMeshMaterial,
-  decodeEmbeddedMeshTextures,
   createCircleMesh,
   createPlaneMesh,
   createSphereMesh,
@@ -15,7 +14,11 @@ import {
 import { encodeCreateSchematic, type StructureCell } from '@mesh-to-copycats/minecraft-nbt';
 
 import { EditorScene } from './EditorScene.js';
-import { decodeBrowserImageTexture, importImageAsPlane } from './image-mesh.js';
+import {
+  decodeBrowserImageTexture,
+  decodeEmbeddedMeshTexturesBrowser,
+  importImageAsPlane,
+} from './image-mesh.js';
 import type {
   CompleteResponse,
   QualityName,
@@ -186,8 +189,8 @@ export function App() {
         setStatus('complete');
         setError(response.invalidMaterialCells === 0
           ? ''
-          : `${response.invalidMaterialCells} cells have no compatible included material; ` +
-            'they cannot be exported until the include/alpha/Copycats constraints are resolved.');
+          : `Automatic material fallback failed for ${response.invalidMaterialCells} cells; ` +
+            'this is an internal resolver error.');
         setView('split');
       } else {
         setError(response.message);
@@ -271,7 +274,7 @@ export function App() {
     const imported = extension === 'obj'
       ? importObj(await file.text())
       : extension === 'glb'
-        ? decodeEmbeddedMeshTextures(importGlb(await file.arrayBuffer()))
+        ? await decodeEmbeddedMeshTexturesBrowser(importGlb(await file.arrayBuffer()))
         : file.type.startsWith('image/')
           ? await importImageAsPlane(file, imageAlphaThreshold)
           : undefined;
@@ -380,8 +383,8 @@ export function App() {
     if (result.invalidMaterialCells > 0) {
       const coordinates = result.unresolvedMaterialCellCoordinates.join('; ');
       setError(
-        `${result.invalidMaterialCells} cells have no compatible included material. ` +
-        'Check namespace selection, texture alpha and Copycats acceptance, then rebuild.' +
+        `Automatic material fallback failed for ${result.invalidMaterialCells} cells. ` +
+        'This is an internal resolver error; rebuild once or report the affected coordinates.' +
         (coordinates.length === 0 ? '' : ` First cells: ${coordinates}.`),
       );
       return;

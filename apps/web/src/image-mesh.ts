@@ -1,7 +1,14 @@
-import { createAlphaMaskedPlaneMesh, type PackedTriangleMesh, type PackedTextureAtlas } from '@mesh-to-copycats/mesh';
+/// <reference lib="dom" />
 
-export async function decodeBrowserImageTexture(file: File): Promise<PackedTextureAtlas> {
-  const bitmap = await createImageBitmap(file);
+import {
+  appendTextureAtlas,
+  createAlphaMaskedPlaneMesh,
+  type PackedTriangleMesh,
+  type PackedTextureAtlas,
+} from '@mesh-to-copycats/mesh';
+
+async function decodeBrowserImageBlob(blob: Blob): Promise<PackedTextureAtlas> {
+  const bitmap = await createImageBitmap(blob);
   try {
     if (bitmap.width < 1 || bitmap.height < 1 || bitmap.width > 0xffff || bitmap.height > 0xffff) {
       throw new RangeError('Image dimensions must be in 1..65535 pixels');
@@ -27,6 +34,32 @@ export async function decodeBrowserImageTexture(file: File): Promise<PackedTextu
   } finally {
     bitmap.close();
   }
+}
+
+export function decodeBrowserImageTexture(file: File): Promise<PackedTextureAtlas> {
+  return decodeBrowserImageBlob(file);
+}
+
+/** Decodes browser-supported embedded images, including JPEG and WebP textures. */
+export async function decodeEmbeddedMeshTexturesBrowser(
+  mesh: PackedTriangleMesh,
+): Promise<PackedTriangleMesh> {
+  if (mesh.embeddedTextures === undefined || mesh.embeddedTextures.length === 0) return mesh;
+  let textureAtlas: PackedTextureAtlas | undefined;
+  for (const texture of mesh.embeddedTextures) {
+    const encoded = texture.bytes.slice().buffer;
+    const decoded = await decodeBrowserImageBlob(new Blob([encoded], { type: texture.mimeType }));
+    const wrapped: PackedTextureAtlas = {
+      ...decoded,
+      wrapS: Uint32Array.of(texture.wrapS),
+      wrapT: Uint32Array.of(texture.wrapT),
+    };
+    textureAtlas = textureAtlas === undefined
+      ? wrapped
+      : appendTextureAtlas(textureAtlas, wrapped);
+  }
+  if (textureAtlas === undefined) return mesh;
+  return { ...mesh, textureAtlas };
 }
 
 export async function importImageAsPlane(file: File, alphaThreshold = 1): Promise<PackedTriangleMesh> {

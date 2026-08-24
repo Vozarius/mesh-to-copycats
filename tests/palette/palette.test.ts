@@ -254,6 +254,29 @@ describe('post-material realization selection', () => {
     expect(opaque.paletteIndexes[0]).toBe(0);
   });
 
+  it('uses the nearest included material when every strict constraint rejects it', () => {
+    const catalog = getFixtureCatalog();
+    const fullShape = catalog.findShapeId('fixture:full_cube', {})!;
+    const palette = createMaterialPalette([{
+      alpha: 0.2,
+      blockId: 'minecraft:tinted_glass',
+      compatibility: 0,
+      itemId: 'minecraft:tinted_glass',
+      srgb: [0.45, 0.45, 0.45],
+    }]);
+    const resolved = resolveMaterials({
+      allowedPaletteIndexes: Uint8Array.of(1),
+      catalog,
+      geometryIds: Uint32Array.of(catalog.shapeGeometry[fullShape]!),
+      palette,
+      samples,
+    });
+
+    expect(resolved.invalidCells[0]).toBe(0);
+    expect(resolved.paletteIndexes[0]).toBe(0);
+    expect(resolved.acceptedMaterialBlockIds[0]).toBe('minecraft:tinted_glass');
+  });
+
   it('uses four independently colored Byte parts for a planar half-block target', () => {
     const catalog = getFixtureCatalog();
     const byteShape = catalog.blockIds.findIndex((blockId, shapeId) =>

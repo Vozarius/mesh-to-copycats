@@ -15,7 +15,6 @@ import {
   createSparseCellOccupancy,
   createSparseCellOctantOccupancy,
   createSparseCellSolidOccupancy,
-  getMeshOrientationSign,
   popcount32,
 } from '../../../packages/voxelizer/src/index.js';
 
@@ -245,7 +244,6 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
           allowedGeometryIds[geometryId] = 1;
         }
       }
-      const orientationSign = getMeshOrientationSign(request.mesh, { origin: new Float64Array(3), scale: 1 });
       const result = await optimizeMeshProgressive({
         allowedGeometryIds,
         batchSize: 512,
@@ -264,13 +262,14 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
           extraWeight: 1,
           // Missing surface voxels are visible holes. Keep this finite so a slightly
           // smaller closed form can still beat a grossly oversized outer approximation.
-          missingWeight: 16,
+          missingWeight: 1,
           qualityMode: qualityMode(request.quality),
         },
         preferPlanarByteGeometry: request.highDetailImagePlane,
         rasterizer: { scale: request.scale },
         signal: abort,
       });
+      const orientationSign = result.surface.orientationSign;
       const palette = loaded.palette;
       const included = request.includedMaterialItemIds === undefined
         ? undefined

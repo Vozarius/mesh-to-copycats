@@ -158,17 +158,61 @@ function maskMoments(mask: Uint32Array, offset: number, resolution: Resolution):
   };
 }
 
+const geometryMomentCaches = new WeakMap<PackedShapeCatalog, Map<Resolution, Float64Array>>();
+
+function geometryMoments(
+  catalog: PackedShapeCatalog,
+  geometryId: number,
+  resolution: Resolution,
+): MaskMoments {
+  let resolutions = geometryMomentCaches.get(catalog);
+  if (resolutions === undefined) {
+    resolutions = new Map();
+    geometryMomentCaches.set(catalog, resolutions);
+  }
+  let values = resolutions.get(resolution);
+  if (values === undefined) {
+    values = new Float64Array(catalog.geometryCount * 6);
+    values.fill(Number.NaN);
+    resolutions.set(resolution, values);
+  }
+  const slot = geometryId * 6;
+  if (Number.isNaN(values[slot] ?? Number.NaN)) {
+    const computed = maskMoments(
+      catalog.getMaskPool(resolution),
+      catalog.geometryMaskOffset(geometryId, resolution),
+      resolution,
+    );
+    values.set([
+      computed.centerX,
+      computed.centerY,
+      computed.centerZ,
+      computed.varianceX,
+      computed.varianceY,
+      computed.varianceZ,
+    ], slot);
+  }
+  return {
+    centerX: values[slot] ?? 0,
+    centerY: values[slot + 1] ?? 0,
+    centerZ: values[slot + 2] ?? 0,
+    varianceX: values[slot + 3] ?? 0,
+    varianceY: values[slot + 4] ?? 0,
+    varianceZ: values[slot + 5] ?? 0,
+  };
+}
+
 function compareScoredGeometry(
   left: ScoredGeometry,
   right: ScoredGeometry,
   catalog: PackedShapeCatalog,
 ): number {
   const scoreOrder = compareWeightedScore(left, right);
-  const symmetryOrder = left.symmetryError - right.symmetryError;
-  if (symmetryOrder !== 0) return symmetryOrder;
   if (scoreOrder !== 0) return scoreOrder;
   const momentOrder = left.momentError - right.momentError;
   if (momentOrder !== 0) return momentOrder;
+  const symmetryOrder = left.symmetryError - right.symmetryError;
+  if (symmetryOrder !== 0) return symmetryOrder;
   const leftShape = catalog.geometryRepresentativeShape[left.geometryId] ?? 0;
   const rightShape = catalog.geometryRepresentativeShape[right.geometryId] ?? 0;
   const familyOrder =
@@ -214,11 +258,7 @@ export function rankGeometryCandidates(
       bound,
     );
     if (score === undefined) continue;
-    const candidateMoments = maskMoments(
-      pool,
-      catalog.geometryMaskOffset(geometryId, resolution),
-      resolution,
-    );
+    const candidateMoments = geometryMoments(catalog, geometryId, resolution);
     const momentError =
       (targetMoments.centerX - candidateMoments.centerX) ** 2 +
       (targetMoments.centerY - candidateMoments.centerY) ** 2 +

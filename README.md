@@ -89,24 +89,33 @@ controlled ticks, consumed its own checklist (`copycat_board×8`, `stone×6`,
 the verifier removed the cannon and test structure.
 The optimized preview greedily boxes every selected part's exact 16³ mask.
 The material sidebar loads the complete generated texture library before a
-build. It supports search, Select all, Deselect all and per-block checkboxes;
-the solver only considers the explicitly included allow-list.
-Each OBJ/GLB source material slot can also be locked to a specific generated
-Minecraft material. Locks are checked through the same per-part compatibility,
-acceptance and placement pipeline as automatic matches, support undo/redo, and
-make the previous result non-exportable until it has been rebuilt.
+build. It supports search, Select all, Deselect all and per-block checkboxes.
+The strict material pass uses only that include list; if the conjunction of
+alpha, Copycats acceptance and placement evidence has no solution, a
+deterministic nearest-material fallback widens the palette instead of blocking
+NBT export. Each OBJ/GLB source material slot can also be locked to a specific
+generated Minecraft material. Locks use the same validation and fallback order,
+support undo/redo, and make the previous result stale until it is rebuilt.
 The editor applies uniform Minecraft scale, XYZ rotation and block-space
 translation to both the Three preview and the Worker input, with Center + Ground
 and Reset controls. Source preview rendering preserves per-triangle material
-groups, linear base-color factors, alpha and every decoded embedded texture.
+groups, linear base-color factors and alpha. Embedded GLB PNG, JPEG, WebP and
+other browser-decodable textures are converted to the same packed RGBA atlas.
 The 3D viewport has no distance fog. Its configurable camera Clip end defaults
 to 1,000,000 blocks and uses a logarithmic depth buffer for the large range.
 The scale field accepts any positive finite value. A separate UV texture can be
-attached to any imported OBJ/GLB material slot. Locally planar cells retain their original GRID16 mask. Copycat Byte is preferred
-only when that mask is already an exact union of complete 8x8x8 octants; thin
-surfaces remain eligible for mathematically closer panels and half-layers.
-Coverage-constrained fitting forbids a selected non-air realization from
-leaving a rasterized surface voxel uncovered, while the interior remains hollow.
+attached to any imported OBJ/GLB material slot. Imported image planes expand
+touched quadrants to the 2x2 Copycat Byte grid so each part receives an
+independent material sample.
+
+The geometry allow-list is a hard constraint. Within it the production pipeline
+scores every enabled realization by equal missing/extra voxel error; it never
+substitutes an unselected Copycat type. Reflection canonicalization makes
+mirrored cell masks choose mirrored states, while moment and symmetry metrics
+only break exact score ties. If no selected state covers the complete target,
+the nearest selected state wins instead of throwing or forcing an oversized
+cover. Watertight meshes use the solid side of each local surface patch, while
+unscanned model interiors remain hollow.
 
 Neighbour updates are streamed directly from the extractor JSON into a
 15.58 MiB checksummed sparse binary (1,214,004 changed probes), rather than being
