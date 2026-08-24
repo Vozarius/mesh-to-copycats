@@ -79,6 +79,17 @@ function demoMesh(): PackedTriangleMesh {
   });
 }
 
+const EMPTY_MESH = finalizeMesh({
+  indices: [],
+  materialNames: ['loading'],
+  positions: [],
+  triangleMaterials: [],
+});
+
+function waitForAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => { resolve(); }));
+}
+
 function formatNumber(value: number): string {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(value);
 }
@@ -203,8 +214,8 @@ export function App() {
     };
   }, []);
 
-  const selectMesh = (nextMesh: PackedTriangleMesh, name: string, isImagePlane = false) => {
-    if (status === 'running' && worker.current !== undefined) {
+  const selectMesh = (nextMesh: PackedTriangleMesh, name: string, isImagePlane = false, alreadyReleased = false) => {
+    if (!alreadyReleased && status === 'running' && worker.current !== undefined) {
       worker.current.postMessage({ requestId: request.current, type: 'cancel' } satisfies WorkerRequest);
       request.current += 1;
     }
@@ -270,6 +281,23 @@ export function App() {
   };
 
   const importFile = async (file: File) => {
+    if (worker.current !== undefined) {
+      worker.current.postMessage({ requestId: request.current, type: 'cancel' } satisfies WorkerRequest);
+    }
+    request.current += 1;
+    setMesh(EMPTY_MESH);
+    setImagePlane(false);
+    setFilename(file.name);
+    setResult(undefined);
+    setStatus('idle');
+    setView('original');
+    setError('');
+    setExportNotice('');
+    setMaterialOverrides(['']);
+    setSelectedMaterialSlot(0);
+    setModelTransform(IDENTITY_TRANSFORM);
+    await waitForAnimationFrame();
+    await waitForAnimationFrame();
     const extension = file.name.split('.').pop()?.toLowerCase();
     const imported = extension === 'obj'
       ? importObj(await file.text())
@@ -279,7 +307,7 @@ export function App() {
           ? await importImageAsPlane(file, imageAlphaThreshold)
           : undefined;
     if (imported === undefined) throw new Error('Choose an OBJ, GLB or image file');
-    selectMesh(imported, file.name, file.type.startsWith('image/'));
+    selectMesh(imported, file.name, file.type.startsWith('image/'), true);
   };
 
   const importUvTexture = async (file: File) => {
@@ -483,6 +511,7 @@ export function App() {
               accept=".obj,.glb,image/*,model/obj,model/gltf-binary"
               onChange={(event) => {
                 const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = '';
                 if (file !== undefined) void importFile(file).catch((reason: unknown) => {
                   setError(reason instanceof Error ? reason.message : String(reason));
                   setStatus('error');

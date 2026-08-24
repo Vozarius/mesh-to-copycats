@@ -3,6 +3,7 @@ import * as fc from 'fast-check';
 
 import {
   compareWeightedScore,
+  createTargetProximityMask,
   quantizeWeights,
   scoreMaskAtOffset,
   scoreToNumber,
@@ -124,5 +125,31 @@ describe('symmetric occupancy scoring', () => {
     );
     expect(boundaryMiss.missingCount).toBe(interiorMiss.missingCount);
     expect(compareWeightedScore(boundaryMiss, interiorMiss)).toBeGreaterThan(0);
+  });
+
+  it('penalizes isolated candidate voxels farther than one eighth block from the target', () => {
+    const set = (mask: Uint32Array, x: number, y: number, z: number) => {
+      const bit = x + 4 * (y + 4 * z);
+      mask[bit >>> 5] = (mask[bit >>> 5] ?? 0) | (1 << (bit & 31));
+    };
+    const target = new Uint32Array(2);
+    const near = new Uint32Array(2);
+    const far = new Uint32Array(2);
+    set(target, 1, 1, 1);
+    set(near, 1, 1, 1);
+    set(near, 2, 1, 1);
+    set(far, 1, 1, 1);
+    set(far, 3, 3, 3);
+    const proximity = createTargetProximityMask(target, 4);
+    const weights = quantizeWeights(1, 1);
+    const nearScore = requireScore(
+      scoreMaskAtOffset(target, near, 0, 4, weights, undefined, 0, 2, proximity),
+    );
+    const farScore = requireScore(
+      scoreMaskAtOffset(target, far, 0, 4, weights, undefined, 0, 2, proximity),
+    );
+
+    expect(nearScore.extraCount).toBe(farScore.extraCount);
+    expect(compareWeightedScore(farScore, nearScore)).toBeGreaterThan(0);
   });
 });

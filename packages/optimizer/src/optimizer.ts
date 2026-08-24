@@ -57,6 +57,11 @@ function settingsWithDefaults(
   ) {
     throw new RangeError('Invalid optimizer candidate limits');
   }
+  if (!Number.isFinite(settings.protrusionWeight) ||
+    settings.protrusionWeight < 0 || settings.protrusionWeight > 8
+  ) {
+    throw new RangeError('Protrusion weight must be finite and in 0..8');
+  }
   return settings;
 }
 
@@ -403,6 +408,9 @@ export class GeometryOptimizer {
       throw new Error('Candidate generation produced no shapes');
     }
 
+    const protrusionWeight = refinementReasons.includes('octant-lattice-direct')
+      ? 0
+      : settings.protrusionWeight;
     started = now();
     let ranked = rankGeometryCandidates(
       generatedGeometryIds,
@@ -412,6 +420,7 @@ export class GeometryOptimizer {
       this.catalog,
       weights,
       settings.boundaryWeight,
+      protrusionWeight,
     );
     timings.mask4 = settings.collectTimings ? now() - started : 0;
     allocations += 2;
@@ -460,6 +469,7 @@ export class GeometryOptimizer {
         this.catalog,
         weights,
         settings.boundaryWeight,
+        protrusionWeight,
       );
       timings.mask8 = settings.collectTimings ? now() - started : 0;
       allocations += 2;
@@ -502,6 +512,7 @@ export class GeometryOptimizer {
           this.catalog,
           weights,
           settings.boundaryWeight,
+          protrusionWeight,
         );
         timings.mask16 = settings.collectTimings ? now() - started : 0;
         allocations += 2;

@@ -95,6 +95,8 @@ export function scoreMaskAtOffset(
   weights: QuantizedWeights,
   bound?: WeightedScore,
   boundaryWeight = 0,
+  protrusionWeight = 0,
+  targetProximity?: Uint32Array,
 ): WeightedScore | undefined {
   const words = wordCountForResolution(resolution);
   if (target.length !== words || candidateOffset < 0 || candidateOffset + words > candidatePool.length) {
@@ -102,6 +104,12 @@ export function scoreMaskAtOffset(
   }
   if (!Number.isFinite(boundaryWeight) || boundaryWeight < 0 || boundaryWeight > 4) {
     throw new RangeError('Boundary weight must be finite and in 0..4');
+  }
+  if (!Number.isFinite(protrusionWeight) || protrusionWeight < 0 || protrusionWeight > 8) {
+    throw new RangeError('Protrusion weight must be finite and in 0..8');
+  }
+  if (targetProximity !== undefined && targetProximity.length !== words) {
+    throw new RangeError('Invalid target proximity mask');
   }
 
   const boundary = boundaryMask(resolution);
@@ -112,6 +120,7 @@ export function scoreMaskAtOffset(
   let unionCount = 0;
   let boundaryMissingCount = 0;
   let boundaryExtraCount = 0;
+  let protrudingExtraCount = 0;
   for (let index = 0; index < words; index += 1) {
     const targetWord = target[index] ?? 0;
     const candidateWord = candidatePool[candidateOffset + index] ?? 0;
@@ -125,6 +134,9 @@ export function scoreMaskAtOffset(
     if (boundaryScale !== 0) {
       boundaryMissingCount += popcount32(missingWord & boundaryWord);
       boundaryExtraCount += popcount32(extraWord & boundaryWord);
+    }
+    if (protrusionWeight !== 0 && targetProximity !== undefined) {
+      protrudingExtraCount += popcount32(extraWord & ~(targetProximity[index] ?? 0));
     }
 
     if (bound !== undefined && (index & 7) === 7) {
@@ -148,7 +160,8 @@ export function scoreMaskAtOffset(
     numerator:
       (missingCount + boundaryMissingCount * boundaryScale *
         BOUNDARY_MISSING_MULTIPLIER) * weights.missing +
-      (extraCount + boundaryExtraCount * boundaryScale) * weights.extra,
+      (extraCount + boundaryExtraCount * boundaryScale +
+        protrudingExtraCount * protrusionWeight) * weights.extra,
   };
 }
 
@@ -269,10 +282,12 @@ export function rankGeometryCandidates(
   catalog: PackedShapeCatalog,
   weights: QuantizedWeights,
   boundaryWeight = 0,
+  protrusionWeight = 0,
 ): ScoredGeometry[] {
   const ranked: ScoredGeometry[] = [];
   const pool = catalog.getMaskPool(resolution);
   const targetMoments = maskMoments(target, 0, resolution);
+  const targetProximity = protrusionWeight === 0 ? undefined : createTargetProximityMask(target, resolution);
   const symmetryTransforms: number[] = [];
   for (let bits = 1; bits < 8; bits += 1) {
     let reflected = target;
@@ -293,6 +308,8 @@ export function rankGeometryCandidates(
       weights,
       bound,
       boundaryWeight,
+      protrusionWeight,
+      targetProximity,
     );
     if (baseScore === undefined) continue;
     const candidateMoments = geometryMoments(catalog, geometryId, resolution);
@@ -325,4 +342,38 @@ export function rankGeometryCandidates(
     }
   }
   return ranked;
+}
+
+function setMaskBit(mask: Uint32Array, bit: number): void {
+  mask[bit >>> 5] = (mask[bit >>> 5] ?? 0) | (1 << (bit & 31));
+}
+
+/** Occupancy within one eighth of a block from the sampled target surface/volume. */
+export function createTargetProximityMask(
+  target: Uint32Array,
+  resolution: Resolution,
+): Uint32Array {
+  const words = wordCountForResolution(resolution);
+  if (target.length !== words) throw new RangeError('Invalid target occupancy mask');
+  let proximity = target.slice();
+  const radius = Math.max(1, resolution >>> 3);
+  for (let step = 0; step < radius; step += 1) {
+    const expanded = proximity.slice();
+    for (let z = 0; z < resolution; z += 1) {
+      for (let y = 0; y < resolution; y += 1) {
+        for (let x = 0; x < resolution; x += 1) {
+          const bit = x + resolution * (y + resolution * z);
+          if (((proximity[bit >>> 5] ?? 0) & (1 << (bit & 31))) === 0) continue;
+          if (x > 0) setMaskBit(expanded, bit - 1);
+          if (x + 1 < resolution) setMaskBit(expanded, bit + 1);
+          if (y > 0) setMaskBit(expanded, bit - resolution);
+          if (y + 1 < resolution) setMaskBit(expanded, bit + resolution);
+          if (z > 0) setMaskBit(expanded, bit - resolution * resolution);
+          if (z + 1 < resolution) setMaskBit(expanded, bit + resolution * resolution);
+        }
+      }
+    }
+    proximity = expanded;
+  }
+  return proximity;
 }

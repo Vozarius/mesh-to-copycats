@@ -3,6 +3,7 @@
 import {
   compareWeightedScore,
   DEFAULT_OPTIMIZER_SETTINGS,
+  createTargetProximityMask,
   quantizeWeights,
   scoreMaskAtOffset,
 } from '../../../packages/optimizer/src/index.js';
@@ -222,7 +223,8 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         blockId.includes('copycat')))].sort();
       const geometryBlockIds = ['minecraft:full_block', ...copycatBlockIds];
       const defaultGeometryBlockIds = geometryBlockIds.filter((blockId) =>
-        blockId === 'minecraft:full_block' || blockId.endsWith(':copycat_byte'));
+        !blockId.endsWith(':copycat_slope') &&
+        !blockId.endsWith(':copycat_slope_layer'));
       const response: PaletteResponse = {
         defaultGeometryBlockIds,
         geometryBlockIds,
@@ -273,7 +275,7 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
       }
       const result = await optimizeMeshProgressive({
         allowedGeometryIds,
-        batchSize: 512,
+        batchSize: 128,
         catalog: loaded.catalog,
         expandPlanarImageOctants: request.highDetailImagePlane,
         mesh: request.mesh,
@@ -363,6 +365,7 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
             ? createSparseCellOccupancy(request.mesh, result.surface, cell)
             : createSparseCellSolidOccupancy(request.mesh, result.surface, cell, orientationSign);
         const target = occupancy.getMask(16);
+        const targetProximity = createTargetProximityMask(target, 16);
         const candidate = loaded.catalog.getGeometryMask(geometryId, 16);
         const baseline = loaded.catalog.getGeometryMask(result.geometryIds[cell] ?? 0, 16);
         const candidateScore = scoreMaskAtOffset(
@@ -373,6 +376,8 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
           neighborGeometryWeights,
           undefined,
           DEFAULT_OPTIMIZER_SETTINGS.boundaryWeight,
+          DEFAULT_OPTIMIZER_SETTINGS.protrusionWeight,
+          targetProximity,
         );
         const baselineScore = scoreMaskAtOffset(
           target,
@@ -382,6 +387,8 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
           neighborGeometryWeights,
           undefined,
           DEFAULT_OPTIMIZER_SETTINGS.boundaryWeight,
+          DEFAULT_OPTIMIZER_SETTINGS.protrusionWeight,
+          targetProximity,
         );
         if (
           candidateScore !== undefined &&

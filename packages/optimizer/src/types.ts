@@ -22,6 +22,8 @@ export interface OptimizerSettings {
   readonly maxGeneratedCandidates: number;
   readonly maxGenericCandidates: number;
   readonly missingWeight: number;
+  /** Additional cost for candidate voxels farther than 1/8 block from the target. */
+  readonly protrusionWeight: number;
   readonly qualityMode: QualityMode;
   /** Weight of cell-boundary occupancy in the single geometry-distance objective. */
   readonly boundaryWeight: number;
@@ -40,6 +42,7 @@ export const DEFAULT_OPTIMIZER_SETTINGS: OptimizerSettings = {
   maxGeneratedCandidates: 64,
   maxGenericCandidates: 48,
   missingWeight: 1,
+  protrusionWeight: 2,
   qualityMode: QualityMode.BALANCED,
   boundaryWeight: 0.125,
 };
