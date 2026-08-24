@@ -56,6 +56,8 @@ export interface ExtractSurfaceSamplesOptions {
 }
 
 export interface ResolveMaterialOptions {
+  /** One byte per catalog shape; zero forbids that final block realization. */
+  readonly allowedShapeIds?: Uint8Array;
   /** One byte per palette entry; zero excludes the entry from matching. */
   readonly allowedPaletteIndexes?: Uint8Array;
   /** Maximum absolute source/material opacity difference. Defaults to 0.05. */

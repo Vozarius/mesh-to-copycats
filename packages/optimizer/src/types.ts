@@ -42,6 +42,8 @@ export const DEFAULT_OPTIMIZER_SETTINGS: OptimizerSettings = {
 };
 
 export interface OptimizeCellInput {
+  /** Geometry allow-list built from the user-selected Copycats types. */
+  readonly allowedGeometryIds?: Uint8Array;
   readonly descriptor?: ShapeDescriptor;
   /** Surface pipelines use this to forbid a visible triangle cell from becoming AIR. */
   readonly excludeAir?: boolean;

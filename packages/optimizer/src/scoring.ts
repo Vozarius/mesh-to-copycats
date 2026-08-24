@@ -1,6 +1,7 @@
 import type { PackedShapeCatalog } from '@mesh-to-copycats/shapes';
 import type { Resolution } from '@mesh-to-copycats/shared';
 import {
+  mirrorMask,
   popcount32,
   popcountMask,
   wordCountForResolution,
@@ -24,6 +25,7 @@ export interface WeightedScore {
 export interface ScoredGeometry extends WeightedScore {
   readonly geometryId: number;
   readonly momentError: number;
+  readonly symmetryError: number;
 }
 
 export function quantizeWeights(missing: number, extra: number): QuantizedWeights {
@@ -162,6 +164,8 @@ function compareScoredGeometry(
   catalog: PackedShapeCatalog,
 ): number {
   const scoreOrder = compareWeightedScore(left, right);
+  const symmetryOrder = left.symmetryError - right.symmetryError;
+  if (symmetryOrder !== 0) return symmetryOrder;
   if (scoreOrder !== 0) return scoreOrder;
   const momentOrder = left.momentError - right.momentError;
   if (momentOrder !== 0) return momentOrder;
@@ -174,7 +178,8 @@ function compareScoredGeometry(
   const complexityOrder =
     (catalog.shapeComplexity[leftShape] ?? 0) -
     (catalog.shapeComplexity[rightShape] ?? 0);
-  return complexityOrder !== 0 ? complexityOrder : leftShape - rightShape;
+  if (complexityOrder !== 0) return complexityOrder;
+  return left.geometryId - right.geometryId || leftShape - rightShape;
 }
 
 export function rankGeometryCandidates(
@@ -188,8 +193,18 @@ export function rankGeometryCandidates(
   const ranked: ScoredGeometry[] = [];
   const pool = catalog.getMaskPool(resolution);
   const targetMoments = maskMoments(target, 0, resolution);
+  const symmetryTransforms: number[] = [];
+  for (let bits = 1; bits < 8; bits += 1) {
+    let reflected = target;
+    if ((bits & 1) !== 0) reflected = mirrorMask(reflected, resolution, 'x');
+    if ((bits & 2) !== 0) reflected = mirrorMask(reflected, resolution, 'y');
+    if ((bits & 4) !== 0) reflected = mirrorMask(reflected, resolution, 'z');
+    if (reflected.every((word, index) => word === target[index])) symmetryTransforms.push(bits);
+  }
   for (const geometryId of geometryIds) {
-    const bound = ranked.length >= keep ? ranked[Math.min(keep, ranked.length) - 1] : undefined;
+    const bound = symmetryTransforms.length === 0 && ranked.length >= keep
+      ? ranked[Math.min(keep, ranked.length) - 1]
+      : undefined;
     const score = scoreMaskAtOffset(
       target,
       pool,
@@ -211,7 +226,19 @@ export function rankGeometryCandidates(
       ((targetMoments.varianceX - candidateMoments.varianceX) ** 2 +
         (targetMoments.varianceY - candidateMoments.varianceY) ** 2 +
         (targetMoments.varianceZ - candidateMoments.varianceZ) ** 2) * 0.25;
-    ranked.push({ ...score, geometryId, momentError });
+    const candidateOffset = catalog.geometryMaskOffset(geometryId, resolution);
+    const candidate = pool.subarray(candidateOffset, candidateOffset + target.length);
+    let symmetryError = 0;
+    for (const bits of symmetryTransforms) {
+      let reflected = candidate;
+      if ((bits & 1) !== 0) reflected = mirrorMask(reflected, resolution, 'x');
+      if ((bits & 2) !== 0) reflected = mirrorMask(reflected, resolution, 'y');
+      if ((bits & 4) !== 0) reflected = mirrorMask(reflected, resolution, 'z');
+      for (let word = 0; word < candidate.length; word += 1) {
+        symmetryError += popcount32((candidate[word] ?? 0) ^ (reflected[word] ?? 0));
+      }
+    }
+    ranked.push({ ...score, geometryId, momentError, symmetryError });
     ranked.sort((left, right) => compareScoredGeometry(left, right, catalog));
     if (ranked.length > keep) {
       const cutoff = ranked[keep - 1]!;

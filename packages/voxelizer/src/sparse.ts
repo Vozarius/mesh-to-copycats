@@ -394,6 +394,123 @@ export function rasterizeSparseCellMask16(
   return mask;
 }
 
+/** Returns zero for an open/degenerate mesh, otherwise the winding orientation. */
+export function getMeshOrientationSign(
+  mesh: TriangleMeshView,
+  surface: Pick<PackedSparseSurface, 'origin' | 'scale'>,
+): -1 | 0 | 1 {
+  let scale = 1;
+  for (const coordinate of mesh.positions) {
+    scale = Math.max(scale, Math.abs(coordinate));
+  }
+  const weldTolerance = scale * 1e-6;
+  const vertexKeys = Array.from({ length: mesh.positions.length / 3 }, (_unused, vertex) =>
+    [0, 1, 2].map((axis) =>
+      Math.round((mesh.positions[vertex * 3 + axis] ?? 0) / weldTolerance)).join(','),
+  );
+
+  const edgeUses = new Map<string, { balance: number; count: number }>();
+  for (let triangle = 0; triangle < mesh.indices.length / 3; triangle += 1) {
+    const vertices = [
+      mesh.indices[triangle * 3] ?? 0,
+      mesh.indices[triangle * 3 + 1] ?? 0,
+      mesh.indices[triangle * 3 + 2] ?? 0,
+    ].map((vertex) => vertexKeys[vertex] ?? '');
+    for (let edge = 0; edge < 3; edge += 1) {
+      const from = vertices[edge] ?? '';
+      const to = vertices[(edge + 1) % 3] ?? '';
+      if (from === to) return 0;
+      const key = from < to ? `${from}|${to}` : `${to}|${from}`;
+      const use = edgeUses.get(key) ?? { balance: 0, count: 0 };
+      use.balance += from < to ? 1 : -1;
+      use.count += 1;
+      edgeUses.set(key, use);
+    }
+  }
+  for (const use of edgeUses.values()) {
+    if (use.count !== 2 || use.balance !== 0) return 0;
+  }
+
+  let volume6 = 0;
+  for (let triangle = 0; triangle < mesh.indices.length / 3; triangle += 1) {
+    const a = mesh.indices[triangle * 3] ?? 0;
+    const b = mesh.indices[triangle * 3 + 1] ?? 0;
+    const c = mesh.indices[triangle * 3 + 2] ?? 0;
+    const point = (vertex: number, axis: number): number =>
+      (mesh.positions[vertex * 3 + axis] ?? 0) * surface.scale + (surface.origin[axis] ?? 0);
+    const ax = point(a, 0); const ay = point(a, 1); const az = point(a, 2);
+    const bx = point(b, 0); const by = point(b, 1); const bz = point(b, 2);
+    const cx = point(c, 0); const cy = point(c, 1); const cz = point(c, 2);
+    volume6 += ax * (by * cz - bz * cy) +
+      ay * (bz * cx - bx * cz) +
+      az * (bx * cy - by * cx);
+  }
+  if (Math.abs(volume6) <= Number.EPSILON * scale * scale * scale * mesh.indices.length) return 0;
+  return volume6 > 0 ? 1 : -1;
+}
+
+/**
+ * Classifies GRID16 voxel centers by the inside half-space of the nearest local surface
+ * plane. Unlike triangle-sheet rasterization, this represents the solid side of a closed
+ * mesh and is not affected by the diagonal used to triangulate a smooth quad patch.
+ */
+export function createSparseCellSolidOccupancy(
+  mesh: TriangleMeshView,
+  surface: PackedSparseSurface,
+  cellIndex: number,
+  orientationSign = getMeshOrientationSign(mesh, surface),
+): AdaptiveOccupancy {
+  if (orientationSign === 0) return createSparseCellOccupancy(mesh, surface, cellIndex);
+  const triangles = getSparseCellTriangles(surface, cellIndex);
+  const planes: number[][] = [];
+  for (const triangle of triangles) {
+    const coordinates: number[] = [];
+    for (let corner = 0; corner < 3; corner += 1) {
+      const vertex = mesh.indices[triangle * 3 + corner] ?? 0;
+      for (let axis = 0; axis < 3; axis += 1) {
+        coordinates.push((mesh.positions[vertex * 3 + axis] ?? 0) * surface.scale +
+          (surface.origin[axis] ?? 0));
+      }
+    }
+    const ax = coordinates[0] ?? 0; const ay = coordinates[1] ?? 0; const az = coordinates[2] ?? 0;
+    const abx = (coordinates[3] ?? 0) - ax;
+    const aby = (coordinates[4] ?? 0) - ay;
+    const abz = (coordinates[5] ?? 0) - az;
+    const acx = (coordinates[6] ?? 0) - ax;
+    const acy = (coordinates[7] ?? 0) - ay;
+    const acz = (coordinates[8] ?? 0) - az;
+    let nx = aby * acz - abz * acy;
+    let ny = abz * acx - abx * acz;
+    let nz = abx * acy - aby * acx;
+    const length = Math.hypot(nx, ny, nz);
+    if (length <= surface.epsilon) continue;
+    nx = nx / length * orientationSign;
+    ny = ny / length * orientationSign;
+    nz = nz / length * orientationSign;
+    planes.push([ax, ay, az, nx, ny, nz]);
+  }
+  if (planes.length === 0) return createSparseCellOccupancy(mesh, surface, cellIndex);
+  const mask = createMask(16);
+  const cellX = surface.cellX[cellIndex] ?? 0;
+  const cellY = surface.cellY[cellIndex] ?? 0;
+  const cellZ = surface.cellZ[cellIndex] ?? 0;
+  for (let z = 0; z < 16; z += 1) for (let y = 0; y < 16; y += 1) for (let x = 0; x < 16; x += 1) {
+    const px = cellX + (x + 0.5) / 16;
+    const py = cellY + (y + 0.5) / 16;
+    const pz = cellZ + (z + 0.5) / 16;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    let inside = false;
+    for (const [ax, ay, az, nx, ny, nz] of planes) {
+      const signed = (px - ax!) * nx! + (py - ay!) * ny! + (pz - az!) * nz!;
+      if (Math.abs(signed) >= nearestDistance) continue;
+      nearestDistance = Math.abs(signed);
+      inside = signed <= surface.epsilon;
+    }
+    if (inside) setBit(mask, bitIndex(16, x, y, z));
+  }
+  return AdaptiveOccupancy.fromMask16(mask);
+}
+
 export function createSparseCellOccupancy(
   mesh: TriangleMeshView,
   surface: PackedSparseSurface,

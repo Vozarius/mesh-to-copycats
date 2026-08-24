@@ -5,6 +5,7 @@ export type QualityName = 'BALANCED' | 'FAST' | 'QUALITY';
 export interface OptimizeRequest {
   /** Imported images deliberately use independently colored Byte octants. */
   readonly highDetailImagePlane: boolean;
+  readonly includedGeometryBlockIds: readonly string[];
   readonly includedMaterialItemIds?: readonly string[];
   readonly materialOverrides: readonly string[];
   readonly mesh: PackedTriangleMesh;
@@ -27,6 +28,8 @@ export interface CancelRequest {
 export type WorkerRequest = CancelRequest | LoadPaletteRequest | OptimizeRequest;
 
 export interface PaletteResponse {
+  readonly defaultGeometryBlockIds: readonly string[];
+  readonly geometryBlockIds: readonly string[];
   readonly itemIds: readonly string[];
   readonly requestId: number;
   readonly srgb: Float32Array;

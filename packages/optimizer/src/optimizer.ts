@@ -10,6 +10,8 @@ import {
 import {
   DESCRIPTOR,
   computeDescriptor,
+  maskToHex,
+  mirrorMask,
 } from '@mesh-to-copycats/voxelizer';
 
 import {
@@ -91,15 +93,93 @@ function requiredCoverageCandidates(
   target: Uint32Array,
   resolution: Resolution,
   catalog: PackedShapeCatalog,
+  isGeometryAllowed?: (geometryId: number) => boolean,
 ): number[] {
   const covering = coveringGeometryIds(geometryIds, target, resolution, catalog);
   if (covering.length > 0) return covering;
   const full = catalog.routeIndex.get('FULL');
   if (full !== undefined) {
-    const fallback = coveringGeometryIds(full, target, resolution, catalog);
+    const fallback = coveringGeometryIds(full, target, resolution, catalog).filter(
+      (geometryId) => isGeometryAllowed === undefined || isGeometryAllowed(geometryId),
+    );
     if (fallback.length > 0) return fallback;
   }
   throw new Error(`No geometry candidate covers the target at ${resolution}³`);
+}
+
+const GEOMETRY_KEY_PREFIX = 'GRID16_EXACT:v1:';
+const geometryIndexes = new WeakMap<PackedShapeCatalog, ReadonlyMap<string, number>>();
+const reflectedGeometryIds = new WeakMap<PackedShapeCatalog, Uint32Array[]>();
+
+function reflectMask(mask: Uint32Array, resolution: Resolution, bits: number): Uint32Array {
+  let reflected = mask;
+  if ((bits & 1) !== 0) reflected = mirrorMask(reflected, resolution, 'x');
+  if ((bits & 2) !== 0) reflected = mirrorMask(reflected, resolution, 'y');
+  if ((bits & 4) !== 0) reflected = mirrorMask(reflected, resolution, 'z');
+  return reflected;
+}
+
+function canonicalReflections(mask: Uint32Array): { mask: Uint32Array; transforms: number[] } {
+  let bestMask = mask;
+  let bestKey = maskToHex(mask);
+  const transforms = [0];
+  for (let bits = 1; bits < 8; bits += 1) {
+    const candidate = reflectMask(mask, 4, bits);
+    const key = maskToHex(candidate);
+    if (key > bestKey) continue;
+    if (key < bestKey) {
+      bestKey = key;
+      bestMask = candidate;
+      transforms.length = 0;
+    }
+    transforms.push(bits);
+  }
+  return { mask: bestMask, transforms };
+}
+
+function reflectedGeometryId(
+  catalog: PackedShapeCatalog,
+  geometryId: number,
+  transform: number,
+): number | undefined {
+  if (transform === 0) return geometryId;
+  let indexes = geometryIndexes.get(catalog);
+  if (indexes === undefined) {
+    indexes = new Map(catalog.geometryKeys.map((key, id) => [key, id]));
+    geometryIndexes.set(catalog, indexes);
+  }
+  let transforms = reflectedGeometryIds.get(catalog);
+  if (transforms === undefined) {
+    transforms = Array.from({ length: 8 }, () => new Uint32Array(catalog.geometryCount));
+    reflectedGeometryIds.set(catalog, transforms);
+  }
+  const cache = transforms[transform]!;
+  const cached = cache[geometryId] ?? 0;
+  if (cached !== 0) return cached === 0xffff_ffff ? undefined : cached - 1;
+  const mask = reflectMask(catalog.getGeometryMask(geometryId, 16), 16, transform);
+  const reflected = indexes.get(`${GEOMETRY_KEY_PREFIX}${maskToHex(mask)}`);
+  cache[geometryId] = reflected === undefined ? 0xffff_ffff : reflected + 1;
+  return reflected;
+}
+
+function generateCanonicalCandidates(
+  mask4: Uint32Array,
+  descriptor: Float32Array,
+  settings: OptimizerSettings,
+  catalog: PackedShapeCatalog,
+): ReturnType<typeof generateCandidates> & { readonly transform: number } {
+  const canonical = canonicalReflections(mask4);
+  const transform = canonical.transforms[0] ?? 0;
+  const canonicalDescriptor = computeDescriptor(canonical.mask, 4, {
+    normalVariance: descriptor[DESCRIPTOR.NORMAL_VARIANCE] ?? 0,
+    normalX: (descriptor[DESCRIPTOR.NORMAL_X] ?? 0) * ((transform & 1) === 0 ? 1 : -1),
+    normalY: (descriptor[DESCRIPTOR.NORMAL_Y] ?? 0) * ((transform & 2) === 0 ? 1 : -1),
+    normalZ: (descriptor[DESCRIPTOR.NORMAL_Z] ?? 0) * ((transform & 4) === 0 ? 1 : -1),
+  });
+  return {
+    ...generateCandidates(canonical.mask, canonicalDescriptor, settings, catalog),
+    transform,
+  };
 }
 
 export class GeometryOptimizer {
@@ -133,19 +213,35 @@ export class GeometryOptimizer {
     let allocations = 3;
 
     let started = now();
-    const generated = generateCandidates(mask4, descriptor, settings, this.catalog);
+    const generated = generateCanonicalCandidates(mask4, descriptor, settings, this.catalog);
+    if (input.allowedGeometryIds !== undefined && input.allowedGeometryIds.length !== this.catalog.geometryCount) {
+      throw new RangeError('Allowed geometry mask size does not match catalog');
+    }
+    const transform = generated.transform;
+    const canonicalMask4 = reflectMask(mask4, 4, transform);
+    const actualGeometryId = (geometryId: number): number | undefined =>
+      reflectedGeometryId(this.catalog, geometryId, transform);
+    const isGeometryAllowed = (geometryId: number): boolean => {
+      const actual = actualGeometryId(geometryId);
+      return actual !== undefined &&
+        (input.allowedGeometryIds === undefined || input.allowedGeometryIds[actual] === 1);
+    };
     let generatedGeometryIds = input.excludeAir === true
       ? generated.geometryIds.filter((geometryId) => {
-          const shapeId = this.catalog.geometryRepresentativeShape[geometryId] ?? 0;
+          const actual = actualGeometryId(geometryId);
+          if (actual === undefined) return false;
+          const shapeId = this.catalog.geometryRepresentativeShape[actual] ?? 0;
           return (this.catalog.shapeFamily[shapeId] ?? 0) !== 0;
         })
       : generated.geometryIds;
+    generatedGeometryIds = generatedGeometryIds.filter(isGeometryAllowed);
     if (input.requireCoverage === true) {
       generatedGeometryIds = requiredCoverageCandidates(
         generatedGeometryIds,
-        mask4,
+        canonicalMask4,
         4,
         this.catalog,
+        isGeometryAllowed,
       );
     }
     timings.candidateGeneration = settings.collectTimings ? now() - started : 0;
@@ -156,7 +252,7 @@ export class GeometryOptimizer {
     started = now();
     let ranked = rankGeometryCandidates(
       generatedGeometryIds,
-      mask4,
+      canonicalMask4,
       4,
       settings.keepAfter4,
       this.catalog,
@@ -190,13 +286,14 @@ export class GeometryOptimizer {
       } else {
         refinementReasons.push('mask4-low-margin');
       }
-      const mask8 = input.occupancy.getMask(8);
+      const mask8 = reflectMask(input.occupancy.getMask(8), 8, transform);
       const mask8Candidates = input.requireCoverage === true
         ? requiredCoverageCandidates(
             ranked.map(({ geometryId }) => geometryId),
             mask8,
             8,
             this.catalog,
+            isGeometryAllowed,
           )
         : ranked.map(({ geometryId }) => geometryId);
       started = now();
@@ -230,13 +327,14 @@ export class GeometryOptimizer {
         else if (lowMargin8) refinementReasons.push('mask8-low-margin');
         else if (complex) refinementReasons.push('surface-complexity');
         else refinementReasons.push('quality-mode');
-        const mask16 = input.occupancy.getMask(16);
+        const mask16 = reflectMask(input.occupancy.getMask(16), 16, transform);
         const mask16Candidates = input.requireCoverage === true
           ? requiredCoverageCandidates(
               ranked.map(({ geometryId }) => geometryId),
               mask16,
               16,
               this.catalog,
+              isGeometryAllowed,
             )
           : ranked.map(({ geometryId }) => geometryId);
         started = now();
@@ -258,7 +356,11 @@ export class GeometryOptimizer {
     if (ranked.length === 0) throw new Error('Every geometry candidate was pruned');
     const publicCandidates = ranked
       .slice(0, settings.alternatives + 1)
-      .map((score) => this.toPublicCandidate(score, usedResolution));
+      .map((score) => {
+        const geometryId = actualGeometryId(score.geometryId);
+        if (geometryId === undefined) throw new Error('Canonical geometry has no reflected realization');
+        return this.toPublicCandidate({ ...score, geometryId }, usedResolution);
+      });
     const best = publicCandidates[0]!;
     return {
       alternatives: publicCandidates.slice(1),

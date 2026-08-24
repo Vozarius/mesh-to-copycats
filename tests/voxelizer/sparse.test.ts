@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { createSphereMesh } from '../../packages/mesh/src/index.js';
 
 import {
   createSparseCellOccupancy,
+  createSparseCellSolidOccupancy,
   decodeSparseCellKey,
+  getMeshOrientationSign,
   getSparseCellTriangles,
+  mirrorMask,
   popcountMask,
   rasterizeSparseCellMask16,
   rasterizeSparseSurface,
@@ -70,6 +74,38 @@ describe('sparse surface rasterizer', () => {
     expect(surface.cellCount).toBeGreaterThan(1_000);
     expect(surface.cellCount).toBeLessThan(25_000);
     expect(surface.cellCount).toBeLessThan(101 ** 3 / 20);
+  });
+
+  it('classifies the solid side of a sphere independently of triangle-sheet diagonals', () => {
+    const sphere = createSphereMesh({ latitudeSegments: 12, longitudeSegments: 16, radius: 2 });
+    const surface = rasterizeSparseSurface(sphere);
+    const orientation = getMeshOrientationSign(sphere, surface);
+    expect(orientation).not.toBe(0);
+    const cells = new Map(Array.from({ length: surface.cellCount }, (_value, cell) => [
+      `${surface.cellX[cell]},${surface.cellY[cell]},${surface.cellZ[cell]}`,
+      cell,
+    ]));
+    let compared = 0;
+    for (let cell = 0; cell < surface.cellCount; cell += 1) {
+      const reflected = cells.get(
+        `${-1 - (surface.cellX[cell] ?? 0)},${surface.cellY[cell]},${surface.cellZ[cell]}`,
+      );
+      if (reflected === undefined) continue;
+      const left = createSparseCellSolidOccupancy(sphere, surface, cell, orientation).getMask(16);
+      const right = createSparseCellSolidOccupancy(sphere, surface, reflected, orientation).getMask(16);
+      expect(Array.from(right)).toEqual(Array.from(mirrorMask(left, 16, 'x')));
+      compared++;
+    }
+    expect(compared).toBeGreaterThan(10);
+  });
+
+  it('keeps an open offset surface in triangle-sheet mode', () => {
+    const open = mesh([0, 0, 2, 1, 0, 2, 0, 1, 2], [0, 1, 2]);
+    const surface = rasterizeSparseSurface(open);
+    expect(getMeshOrientationSign(open, surface)).toBe(0);
+    const sheet = createSparseCellOccupancy(open, surface, 0).getMask(16);
+    const guardedSolid = createSparseCellSolidOccupancy(open, surface, 0).getMask(16);
+    expect(Array.from(guardedSolid)).toEqual(Array.from(sheet));
   });
 
   it('reports degenerate triangles without allocating cells', () => {

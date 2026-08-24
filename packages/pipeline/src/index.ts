@@ -8,6 +8,8 @@ import type { PackedShapeCatalog } from '../../shapes/src/index.js';
 import {
   createSparseCellOccupancy,
   createSparseCellOctantOccupancy,
+  createSparseCellSolidOccupancy,
+  getMeshOrientationSign,
   getSparseCellSurfaceStatistics,
   maskToHex,
   popcountMask,
@@ -22,6 +24,8 @@ export interface SparsePipelineProgress {
 }
 
 export interface OptimizeMeshOptions {
+  /** Geometry allow-list derived from enabled Copycats block types. */
+  readonly allowedGeometryIds?: Uint8Array;
   readonly batchSize?: number;
   readonly catalog: PackedShapeCatalog;
   /** Expands planar image cells to independently materialized Byte octants. */
@@ -34,6 +38,8 @@ export interface OptimizeMeshOptions {
   readonly planarNormalVarianceThreshold?: number;
   readonly rasterizer?: SparseRasterizeOptions;
   readonly signal?: OptimizerAbortSignal;
+  /** Uses the filled side of a closed mesh instead of its triangle sheet. Defaults true. */
+  readonly useSolidOccupancy?: boolean;
 }
 
 export interface ProgressiveOptimizeMeshOptions extends OptimizeMeshOptions {
@@ -73,6 +79,7 @@ interface PipelineState {
   readonly geometryErrors: Float32Array;
   readonly geometryIds: Uint32Array;
   readonly missingCounts: Uint16Array;
+  readonly orientationSign: -1 | 0 | 1;
   readonly planarBytePreferred: Uint8Array;
   readonly optimizer: GeometryOptimizer;
   readonly shapeIds: Uint32Array;
@@ -104,6 +111,7 @@ function begin(options: OptimizeMeshOptions): {
       geometryErrors: new Float32Array(surface.cellCount),
       geometryIds: new Uint32Array(surface.cellCount),
       missingCounts: new Uint16Array(surface.cellCount),
+      orientationSign: options.useSolidOccupancy === false ? 0 : getMeshOrientationSign(options.mesh, surface),
       planarBytePreferred: new Uint8Array(surface.cellCount),
       optimizer: new GeometryOptimizer({
         catalog: options.catalog,
@@ -156,6 +164,7 @@ function optimizeBatchRange(
     throw new Error(`Mesh optimization aborted after ${start} cells`);
   }
   const pendingInputs: Array<{
+    readonly allowedGeometryIds?: Uint8Array;
     readonly excludeAir: boolean;
     readonly occupancy: ReturnType<typeof createSparseCellOccupancy>;
     readonly requireCoverage: boolean;
@@ -163,7 +172,9 @@ function optimizeBatchRange(
   const pendingKeys: string[] = [];
   const pendingCells = new Map<string, number[]>();
   for (let cell = start; cell < end; cell += 1) {
-    const sourceOccupancy = createSparseCellOccupancy(options.mesh, state.surface, cell);
+    const sourceOccupancy = state.orientationSign === 0
+      ? createSparseCellOccupancy(options.mesh, state.surface, cell)
+      : createSparseCellSolidOccupancy(options.mesh, state.surface, cell, state.orientationSign);
     const planar = getSparseCellSurfaceStatistics(options.mesh, state.surface, cell).normalVariance <=
       (options.planarNormalVarianceThreshold ?? 0.025);
     const occupancy = options.expandPlanarImageOctants === true && planar
@@ -189,6 +200,7 @@ function optimizeBatchRange(
     pendingCells.set(key, [cell]);
     pendingKeys.push(key);
     pendingInputs.push({
+      ...(options.allowedGeometryIds === undefined ? {} : { allowedGeometryIds: options.allowedGeometryIds }),
       excludeAir: visible,
       occupancy,
       // A shell may be hollow, but every rasterized surface microvoxel must stay covered.

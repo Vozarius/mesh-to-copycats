@@ -149,6 +149,28 @@ describe('post-material realization selection', () => {
     expect(resolved.acceptedMaterialBlockIds[0]).toBe('fixture:full_cube');
   });
 
+  it('never selects a final realization excluded by the shape allow-list', () => {
+    const catalog = getFixtureCatalog();
+    const fullShape = catalog.findShapeId('fixture:full_cube', {})!;
+    const copycatShape = catalog.findShapeId('fixture:copycat_block', {})!;
+    const allowedShapeIds = new Uint8Array(catalog.shapeCount);
+    allowedShapeIds[copycatShape] = 1;
+    const resolved = resolveMaterials({
+      allowedShapeIds,
+      catalog,
+      geometryIds: Uint32Array.of(catalog.shapeGeometry[fullShape]!),
+      palette: createMaterialPalette([{
+        blockId: 'minecraft:stone',
+        itemId: 'minecraft:stone',
+        srgb: [0.5, 0.5, 0.5],
+      }]),
+      samples,
+    });
+
+    expect(resolved.shapeIds[0]).toBe(copycatShape);
+    expect(resolved.invalidCells[0]).toBe(0);
+  });
+
   it('keeps an exact-equivalent Copycat when only a copycat material exists', () => {
     const catalog = getFixtureCatalog();
     const fullShape = catalog.findShapeId('fixture:full_cube', {})!;

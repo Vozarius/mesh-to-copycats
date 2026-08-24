@@ -374,9 +374,6 @@ function preferred(
   if (left.valid !== right.valid) return right.valid ? right : left;
   if (left.error !== right.error) return right.error < left.error ? right : left;
   if (left.safety !== right.safety) return right.safety < left.safety ? right : left;
-  const leftIsCopycat = isCopycat(catalog.blockIds[left.shapeId] ?? '');
-  const rightIsCopycat = isCopycat(catalog.blockIds[right.shapeId] ?? '');
-  if (leftIsCopycat !== rightIsCopycat) return rightIsCopycat ? left : right;
   if (preferByte) {
     const leftIsByte = catalog.shapeFamily[left.shapeId] === ShapeFamily.BYTE;
     const rightIsByte = catalog.shapeFamily[right.shapeId] === ShapeFamily.BYTE;
@@ -390,6 +387,7 @@ function preferred(
 
 export function resolveMaterials(options: ResolveMaterialOptions): PackedResolvedMaterials {
   const {
+    allowedShapeIds,
     allowedPaletteIndexes,
     alphaTolerance = 0.05,
     catalog,
@@ -408,6 +406,9 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
   }
   if (allowedPaletteIndexes !== undefined && allowedPaletteIndexes.length !== palette.size) {
     throw new Error('Allowed palette mask size does not match material palette');
+  }
+  if (allowedShapeIds !== undefined && allowedShapeIds.length !== catalog.shapeCount) {
+    throw new Error('Allowed shape mask size does not match shape catalog');
   }
   if (preferredByteCells !== undefined && preferredByteCells.length !== geometryIds.length) {
     throw new Error('Preferred Byte cell count does not match geometry grid');
@@ -438,6 +439,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
     cellPartOffsets[cell] = partIds.length;
     let best: EvaluatedRealization | undefined;
     for (const shapeId of catalog.getRealizationShapeIds(geometryIds[cell] ?? 0)) {
+      if (allowedShapeIds !== undefined && allowedShapeIds[shapeId] !== 1) continue;
       best = preferred(
         best,
         evaluateRealization(
@@ -464,6 +466,7 @@ export function resolveMaterials(options: ResolveMaterialOptions): PackedResolve
       // acceptance, alpha matching and placement-safety validation.
       let fallback: EvaluatedRealization | undefined;
       for (const shapeId of catalog.getRealizationShapeIds(geometryIds[cell] ?? 0)) {
+        if (allowedShapeIds !== undefined && allowedShapeIds[shapeId] !== 1) continue;
         fallback = preferred(
           fallback,
           evaluateRealization(

@@ -14,6 +14,8 @@ import { QualityMode } from '@mesh-to-copycats/shared';
 import {
   createSparseCellOccupancy,
   createSparseCellOctantOccupancy,
+  createSparseCellSolidOccupancy,
+  getMeshOrientationSign,
   popcount32,
 } from '../../../packages/voxelizer/src/index.js';
 
@@ -190,7 +192,14 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
   }
   if (request.type === 'load-palette') {
     void loadCatalog().then((loaded) => {
+      const copycatBlockIds = [...new Set(loaded.catalog.blockIds.filter((blockId) =>
+        blockId.includes('copycat')))].sort();
+      const geometryBlockIds = ['minecraft:full_block', ...copycatBlockIds];
+      const defaultGeometryBlockIds = geometryBlockIds.filter((blockId) =>
+        blockId === 'minecraft:full_block' || blockId.endsWith(':copycat_byte'));
       const response: PaletteResponse = {
+        defaultGeometryBlockIds,
+        geometryBlockIds,
         itemIds: loaded.palette.itemIds,
         requestId: request.requestId,
         srgb: loaded.palette.srgb.slice(),
@@ -221,7 +230,24 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
   void (async () => {
     try {
       const loaded = await loadCatalog();
+      const includedGeometry = new Set(request.includedGeometryBlockIds);
+      const fullBlockEnabled = includedGeometry.has('minecraft:full_block');
+      const allowedShapeIds = new Uint8Array(loaded.catalog.shapeCount);
+      const allowedGeometryIds = new Uint8Array(loaded.catalog.geometryCount);
+      for (let geometryId = 0; geometryId < loaded.catalog.geometryCount; geometryId += 1) {
+        const fullGeometry = loaded.catalog.geometryPopcount16[geometryId] === 16 * 16 * 16;
+        for (const shapeId of loaded.catalog.getRealizationShapeIds(geometryId)) {
+          const blockId = loaded.catalog.blockIds[shapeId] ?? '';
+          const copycat = blockId.includes('copycat');
+          const allowed = copycat ? includedGeometry.has(blockId) : fullGeometry && fullBlockEnabled;
+          if (!allowed) continue;
+          allowedShapeIds[shapeId] = 1;
+          allowedGeometryIds[geometryId] = 1;
+        }
+      }
+      const orientationSign = getMeshOrientationSign(request.mesh, { origin: new Float64Array(3), scale: 1 });
       const result = await optimizeMeshProgressive({
+        allowedGeometryIds,
         batchSize: 512,
         catalog: loaded.catalog,
         expandPlanarImageOctants: request.highDetailImagePlane,
@@ -241,7 +267,7 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
           missingWeight: 16,
           qualityMode: qualityMode(request.quality),
         },
-        preferPlanarByteGeometry: true,
+        preferPlanarByteGeometry: request.highDetailImagePlane,
         rasterizer: { scale: request.scale },
         signal: abort,
       });
@@ -266,16 +292,23 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         sourceMaterialPaletteIndexes[sourceMaterial] = paletteIndex;
       }
       const neighborStarted = performance.now();
+      const seedShapeIds = Uint32Array.from(result.geometryIds, (geometryId) => {
+        const shapeId = Array.from(loaded.catalog.getRealizationShapeIds(geometryId)).find(
+          (candidate) => allowedShapeIds[candidate] === 1,
+        );
+        if (shapeId === undefined) throw new Error(`Geometry ${geometryId} has no enabled realization`);
+        return shapeId;
+      });
       const neighbors = loaded.neighbors === undefined
         ? {
             changedCells: 0,
             geometryIds: result.geometryIds,
             iterations: 0,
-            shapeIds: result.shapeIds,
+            shapeIds: seedShapeIds,
           }
         : resolveSparseNeighbors({
             catalog: loaded.catalog,
-            shapeIds: result.shapeIds,
+            shapeIds: seedShapeIds,
             surface: result.surface,
             transitions: loaded.neighbors,
           });
@@ -284,10 +317,18 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
       // geometry selected by the optimizer. Reject only coverage-regressing transitions.
       for (let cell = 0; cell < neighbors.geometryIds.length; cell += 1) {
         const geometryId = neighbors.geometryIds[cell] ?? 0;
+        const resolvedShapeId = neighbors.shapeIds[cell] ?? 0;
+        if (allowedShapeIds[resolvedShapeId] !== 1) {
+          neighbors.geometryIds[cell] = result.geometryIds[cell] ?? 0;
+          neighbors.shapeIds[cell] = seedShapeIds[cell] ?? 0;
+          continue;
+        }
         if (geometryId === result.geometryIds[cell]) continue;
         const occupancy = request.highDetailImagePlane
           ? createSparseCellOctantOccupancy(request.mesh, result.surface, cell)
-          : createSparseCellOccupancy(request.mesh, result.surface, cell);
+          : orientationSign === 0
+            ? createSparseCellOccupancy(request.mesh, result.surface, cell)
+            : createSparseCellSolidOccupancy(request.mesh, result.surface, cell, orientationSign);
         const target = occupancy.getMask(16);
         const candidate = loaded.catalog.getGeometryMask(geometryId, 16);
         let missing = 0;
@@ -296,16 +337,17 @@ scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         }
         if (missing <= (result.missingCounts[cell] ?? 0)) continue;
         neighbors.geometryIds[cell] = result.geometryIds[cell] ?? 0;
-        neighbors.shapeIds[cell] = result.shapeIds[cell] ?? 0;
+        neighbors.shapeIds[cell] = seedShapeIds[cell] ?? 0;
       }
       const acceptedNeighborChangedCells = neighbors.shapeIds.reduce(
-        (count, shapeId, cell) => count + (shapeId === result.shapeIds[cell] ? 0 : 1),
+        (count, shapeId, cell) => count + (shapeId === seedShapeIds[cell] ? 0 : 1),
         0,
       );
       const neighborMs = performance.now() - neighborStarted;
       const materialStarted = performance.now();
       const samples = extractSurfaceSamples(request.mesh, result.surface, { strataPerAxis: 2 });
       const materials = resolveMaterials({
+        allowedShapeIds,
         ...(allowedPaletteIndexes === undefined ? {} : { allowedPaletteIndexes }),
         catalog: loaded.catalog,
         geometryIds: neighbors.geometryIds,

@@ -120,6 +120,11 @@ button { color: inherit; }
 .include-actions button:hover:not(:disabled) { border-color: var(--acid); color: var(--acid); }
 .include-actions button:disabled { cursor: wait; opacity: .4; }
 .include-groups { display: grid; gap: 8px; max-height: 390px; padding: 5px; overflow: auto; border: 1px solid #29312b; background: #090c0a; }
+.copycat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; max-height: 180px; overflow: auto; }
+.copycat-grid label { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 5px; border: 1px solid #29312b; background: #0b0f0c; cursor: pointer; }
+.copycat-grid label.selected { border-color: #c7a94c; background: #19180f; }
+.copycat-grid input { margin: 0; accent-color: #d6bb55; }
+.copycat-grid span { overflow: hidden; font: 8px/1.2 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .material-namespace { border: 1px solid #202820; background: #0d110e; }
 .namespace-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 5px; min-height: 27px; padding: 3px 5px; border-bottom: 1px solid #263029; color: #7d877f; font: 7px 'DM Mono', monospace; text-transform: uppercase; }
 .namespace-heading strong { overflow: hidden; color: #b5bdb6; font-size: 8px; text-overflow: ellipsis; }

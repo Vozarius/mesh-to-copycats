@@ -24,6 +24,8 @@ import type {
 } from './worker-types.js';
 
 interface MaterialLibrary {
+  readonly defaultGeometryBlockIds: readonly string[];
+  readonly geometryBlockIds: readonly string[];
   readonly itemIds: readonly string[];
   readonly srgb: Float32Array;
   readonly textureHeights: Uint16Array;
@@ -140,6 +142,7 @@ export function App() {
   const [imageAlphaThreshold, setImageAlphaThreshold] = useState(16);
   const [cameraClipEnd, setCameraClipEnd] = useState(1_000_000);
   const [includedMaterials, setIncludedMaterials] = useState<ReadonlySet<string>>();
+  const [includedGeometry, setIncludedGeometry] = useState<ReadonlySet<string>>();
   const [materialFilter, setMaterialFilter] = useState('');
   const [materialLibrary, setMaterialLibrary] = useState<MaterialLibrary>();
   const overrideUndo = useRef<readonly string[][]>([]);
@@ -159,6 +162,7 @@ export function App() {
       const response = event.data;
       if (response.type === 'palette') {
         setMaterialLibrary(response);
+        setIncludedGeometry((current) => current ?? new Set(response.defaultGeometryBlockIds));
         setIncludedMaterials((current) => current ?? new Set(response.itemIds));
         return;
       }
@@ -292,6 +296,10 @@ export function App() {
       setError('Select at least one included material before building geometry.');
       return;
     }
+    if (includedGeometry?.size === 0) {
+      setError('Select at least one geometry type before building geometry.');
+      return;
+    }
     if (status === 'running') {
       worker.current.postMessage({ requestId: request.current, type: 'cancel' } satisfies WorkerRequest);
     }
@@ -353,6 +361,7 @@ export function App() {
         ? {}
         : { includedMaterialItemIds: [...includedMaterials].sort() }),
       highDetailImagePlane: imagePlane,
+      includedGeometryBlockIds: [...(includedGeometry ?? [])].sort(),
       materialOverrides,
       mesh: workerMesh,
       quality,
@@ -581,6 +590,42 @@ export function App() {
             <span>{mesh.texcoords === undefined ? 'Mesh has no UV coordinates' : 'Apply image to selected source slot'}</span>
           </label>
           <label className="field-label" htmlFor="minecraft-material">Minecraft material lock</label>
+          <div className="include-materials">
+            <div className="include-heading">
+              <span>Available geometry</span>
+              <b>{includedGeometry?.size ?? 0} / {materialLibrary?.geometryBlockIds.length ?? 0}</b>
+            </div>
+            <div className="include-actions">
+              <button type="button" disabled={materialLibrary === undefined} onClick={() => {
+                if (materialLibrary === undefined) return;
+                setIncludedGeometry(new Set(materialLibrary.geometryBlockIds));
+                setSettingsDirty(true);
+              }}>SELECT ALL</button>
+              <button type="button" disabled={materialLibrary === undefined} onClick={() => {
+                setIncludedGeometry(new Set());
+                setSettingsDirty(true);
+              }}>DESELECT ALL</button>
+            </div>
+            <div className="copycat-grid">
+              {materialLibrary?.geometryBlockIds.map((blockId) => {
+                const selected = includedGeometry?.has(blockId) === true;
+                return <label className={selected ? 'selected' : ''} key={blockId} title={blockId}>
+                  <input type="checkbox" checked={selected} onChange={(event) => {
+                    const checked = event.currentTarget.checked;
+                    setIncludedGeometry((current) => {
+                      const next = new Set(current);
+                      if (checked) next.add(blockId);
+                      else next.delete(blockId);
+                      return next;
+                    });
+                    setSettingsDirty(true);
+                  }} />
+                  <span>{blockId.replace(/^[^:]+:/u, '')}</span>
+                </label>;
+              })}
+            </div>
+            <p className="notice">Full block and every Copycat are equal solver candidates. The closest enabled geometry wins.</p>
+          </div>
           <div className="include-materials">
             <div className="include-heading">
               <span>Include materials</span>

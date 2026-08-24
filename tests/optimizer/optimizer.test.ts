@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createSphereMesh } from '../../packages/mesh/src/index.js';
 
 import {
   createGeometryOptimizer,
@@ -17,8 +18,12 @@ import {
   AdaptiveOccupancy,
   bitIndex,
   createMask,
+  createSparseCellSolidOccupancy,
+  getMeshOrientationSign,
+  rasterizeSparseSurface,
   DESCRIPTOR,
   mirrorMask,
+  maskToHex,
   rotateMaskYClockwise,
   setBit,
 } from '../../packages/voxelizer/src/index.js';
@@ -423,5 +428,91 @@ describe('catalog-wide exact-target property', () => {
         catalog.geometryKeys[geometryId],
       );
     }
+  });
+});
+
+describe('Copycats geometry allow-list', () => {
+  it('keeps Byte-only solutions reflection-equivariant', () => {
+    const byteShape = requireShapeId(catalog, 'fixture:copycat_byte', byteState(0b0010_1101));
+    const sourceGeometry = catalog.shapeGeometry[byteShape] ?? 0;
+    const sourceMask = catalog.getGeometryMask(sourceGeometry, 16);
+    const mirroredTarget = mirrorMask(sourceMask, 16, 'x');
+    const allowedGeometryIds = new Uint8Array(catalog.geometryCount);
+    for (let geometryId = 0; geometryId < catalog.geometryCount; geometryId += 1) {
+      if (Array.from(catalog.getRealizationShapeIds(geometryId)).some(
+        (shapeId) => catalog.shapeFamily[shapeId] === ShapeFamily.BYTE,
+      )) allowedGeometryIds[geometryId] = 1;
+    }
+
+    const original = qualityOptimizer.optimizeCell({
+      allowedGeometryIds,
+      excludeAir: true,
+      occupancy: AdaptiveOccupancy.fromMask16(sourceMask),
+      requireCoverage: true,
+    });
+    const mirrored = qualityOptimizer.optimizeCell({
+      allowedGeometryIds,
+      excludeAir: true,
+      occupancy: AdaptiveOccupancy.fromMask16(mirroredTarget),
+      requireCoverage: true,
+    });
+
+    expect(Array.from(catalog.getGeometryMask(mirrored.best.geometryId, 16))).toEqual(
+      Array.from(mirrorMask(catalog.getGeometryMask(original.best.geometryId, 16), 16, 'x')),
+    );
+    expect(original.best.missingCount).toBe(0);
+    expect(mirrored.best.missingCount).toBe(0);
+  });
+
+  it('keeps closed-sphere choices reflection-equivariant with the full catalog', () => {
+    const sphere = createSphereMesh({ latitudeSegments: 12, longitudeSegments: 16, radius: 2 });
+    const surface = rasterizeSparseSurface(sphere);
+    const orientation = getMeshOrientationSign(sphere, surface);
+    const geometryByMask = new Map(Array.from({ length: catalog.geometryCount }, (_unused, geometryId) => [
+      maskToHex(catalog.getGeometryMask(geometryId, 16)), geometryId,
+    ]));
+    const allowedGeometryIds = new Uint8Array(catalog.geometryCount);
+    for (let geometryId = 0; geometryId < catalog.geometryCount; geometryId += 1) {
+      const reflected = mirrorMask(catalog.getGeometryMask(geometryId, 16), 16, 'x');
+      if (geometryByMask.has(maskToHex(reflected))) allowedGeometryIds[geometryId] = 1;
+    }
+    const cells = new Map(Array.from({ length: surface.cellCount }, (_unused, cell) => [
+      `${surface.cellX[cell]},${surface.cellY[cell]},${surface.cellZ[cell]}`,
+      cell,
+    ]));
+    let compared = 0;
+    for (let cell = 0; cell < surface.cellCount && compared < 24; cell += 1) {
+      const reflected = cells.get(
+        `${-1 - (surface.cellX[cell] ?? 0)},${surface.cellY[cell]},${surface.cellZ[cell]}`,
+      );
+      if (reflected === undefined) continue;
+      const original = qualityOptimizer.optimizeCell({
+        allowedGeometryIds,
+        excludeAir: true,
+        occupancy: createSparseCellSolidOccupancy(sphere, surface, cell, orientation),
+        requireCoverage: true,
+      });
+      const mirrored = qualityOptimizer.optimizeCell({
+        allowedGeometryIds,
+        excludeAir: true,
+        occupancy: createSparseCellSolidOccupancy(sphere, surface, reflected, orientation),
+        requireCoverage: true,
+      });
+      expect(
+        Array.from(catalog.getGeometryMask(mirrored.best.geometryId, 16)),
+        `cell ${surface.cellX[cell]},${surface.cellY[cell]},${surface.cellZ[cell]}: ${original.best.geometryId}/${original.best.missingCount}/${original.best.extraCount} -> ${mirrored.best.geometryId}/${mirrored.best.missingCount}/${mirrored.best.extraCount}`,
+      ).toEqual(
+        Array.from(mirrorMask(catalog.getGeometryMask(original.best.geometryId, 16), 16, 'x')),
+      );
+      compared++;
+    }
+    expect(compared).toBe(24);
+  });
+
+  it('rejects an allow-list with the wrong catalog size', () => {
+    expect(() => qualityOptimizer.optimizeCell({
+      allowedGeometryIds: new Uint8Array(1),
+      occupancy: AdaptiveOccupancy.fromMask16(catalog.getGeometryMask(0, 16)),
+    })).toThrow(/allowed geometry mask size/iu);
   });
 });
