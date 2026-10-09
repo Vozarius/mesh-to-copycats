@@ -18,6 +18,8 @@
     "catalog:fixture": "tsx tools/mod-extractor/src/compile.ts --fixture",
     "web:dev": "pnpm --filter @mesh-to-copycats/web dev",
     "web:build": "pnpm --filter @mesh-to-copycats/web build",
+    "web:build:pages": "pnpm --filter @mesh-to-copycats/web exec vite build --base /mesh-to-copycats/",
+    "web:catalog:verify": "tsx tools/harness/src/verify-web-runtime.ts generated/catalog",
     "materials:verify": "tsx tools/harness/src/verify-materials.ts",
     "neighbors:compile": "node --max-old-space-size=4096 --import tsx tools/mod-extractor/src/compile-neighbors.ts",
     "palette:generate": "tsx tools/palette-generator/src/generate.ts",

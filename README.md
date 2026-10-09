@@ -28,6 +28,7 @@ pnpm neighbors:compile -- generated/catalog --input path/to/extracted-catalog.js
 pnpm schematic:verify -- generated/catalog --out verification.nbt
 pnpm web:dev
 pnpm web:build
+pnpm web:build:pages
 ```
 
 To test the editor, run `pnpm web:dev` from the repository root and open the
@@ -36,6 +37,24 @@ local URL printed by Vite (normally `http://127.0.0.1:5173/`). Do not open
 Worker modules and catalog fetches require the development server. A production
 smoke test can be run with `pnpm web:build` followed by
 `pnpm --filter @mesh-to-copycats/web preview`.
+
+## GitHub Pages
+
+The repository includes `.github/workflows/deploy-pages.yml`. It builds the
+editor with the project-site base path, uploads `apps/web/dist` as a Pages
+artifact and deploys it from `main`. The checked-in
+`.github/pages/catalog.tar.gz` contains only the six browser runtime catalog
+files; the large extractor audit and mod JARs remain local.
+
+Regenerate the archive after changing `generated/catalog`:
+
+```text
+tar -czf .github/pages/catalog.tar.gz -C generated/catalog generated-blocks.bin generated-shapes.bin metadata.json material-palette.json neighbor-transitions.bin runtime-metadata.json
+```
+
+Before the first deployment, set **Settings → Pages → Build and deployment →
+Source** to **GitHub Actions**. The expected project URL is
+`https://vozarius.github.io/mesh-to-copycats/`.
 
 `tools/mod-extractor/neoforge` contains the pinned Minecraft 1.21.1 / NeoForge /
 Create / Copycats+ extraction environment. Before using version-sensitive APIs,

@@ -63,13 +63,14 @@ async function loadCatalog(): Promise<{
   neighbors?: PackedNeighborTransitions;
   source: 'fixture' | 'production';
 }> {
+  const catalogBaseUrl = `${import.meta.env.BASE_URL}catalog`;
   catalogPromise ??= Promise.all([
-    loadWebRuntimeCatalog({ baseUrl: '/catalog' }),
-    fetch('/catalog/material-palette.json').then(async (response) => {
+    loadWebRuntimeCatalog({ baseUrl: catalogBaseUrl }),
+    fetch(`${catalogBaseUrl}/material-palette.json`).then(async (response) => {
       if (!response.ok) throw new Error(`Material palette request failed with HTTP ${response.status}`);
       return loadGeneratedMaterialPalette(await response.text());
     }),
-    fetch('/catalog/neighbor-transitions.bin').then(async (response) => {
+    fetch(`${catalogBaseUrl}/neighbor-transitions.bin`).then(async (response) => {
       if (!response.ok) throw new Error(`Neighbor transitions request failed with HTTP ${response.status}`);
       return decodeNeighborTransitions(new Uint8Array(await response.arrayBuffer()));
     }),
